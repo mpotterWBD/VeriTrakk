@@ -1,4 +1,27 @@
 Label {
-    border: solid white;
-    width: 100%;
+    border: darkkhaki;
+    width: 50%;
+    height: 2;
+}
+
+Header {
+    background: darkkhaki;
+    height: 1;
+    text-style: bold;
+}
+
+#double {
+    border: double darkkhaki;
+}
+
+#left {
+    border: double darkkhaki;
+    height: 5;
+    width: 25%;
+}
+
+#right {
+    border: double darkkhaki;
+    height: 5;
+    width: 75%;
 }
