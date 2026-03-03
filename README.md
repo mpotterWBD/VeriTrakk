@@ -8,3 +8,8 @@ git clone https://github.com/mpotterWBD/VeriTrakk.git
 download Visual Studio Code
 
 Open Folder VeriTrakk
+
+# install textual
+pip install textual
+
+

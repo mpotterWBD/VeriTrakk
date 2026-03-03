@@ -1,3 +1,7 @@
-from .storage import file_parser
+#from .storage import file_parser
+from .app import veritrakk
 
-file_parser()
+app = veritrakk()
+app.run
+
+#file_parser()

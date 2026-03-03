@@ -11,8 +11,3 @@ def file_parser():
 
     print(files)
         
-
-# print(file_path)
-# def file_parser():
-#     with open("/c/Users/17195/Desktop/Westbound Designs/veritrakk/data/test_proc.txt") as f:
-#         print(f.readlines())

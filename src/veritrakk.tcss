@@ -1,0 +1,4 @@
+Label {
+    border: solid white;
+    width: 100%;
+}
