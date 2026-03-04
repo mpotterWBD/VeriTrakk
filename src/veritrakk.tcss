@@ -10,14 +10,10 @@ Header {
     text-style: bold;
 }
 
-#double {
-    border: double darkkhaki;
-}
-
 #left {
     border: double darkkhaki;
     height: 5;
-    width: 25%;
+    width: 100%;
 }
 
 #right {
@@ -25,3 +21,12 @@ Header {
     height: 5;
     width: 75%;
 }
+
+#process_select{
+    color: darkkhaki;
+}
+
+#process_select:focus {
+
+}
+

@@ -1,13 +1,16 @@
 from pathlib import Path
 
 working_dir = Path.cwd()
-data_dir = working_dir / 'veritrakk' / 'data'
+data_dir = working_dir / 'data'
 
-files = []
+prcss_files = []
+file_names = []
 
 def file_parser():
-    for x in data_dir.iterdir(): 
-        files.append(x.name)
+    files = list(data_dir.glob("*.prcss"))    
 
-    print(files)
+    for x in files:
+        file_names.append(x.name)
+
+    return file_names
         
