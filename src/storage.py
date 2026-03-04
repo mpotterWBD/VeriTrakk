@@ -14,3 +14,8 @@ def file_parser():
 
     return file_names
         
+def file_reader(file_name):
+    with open(data_dir / file_name, 'r') as f:
+        data = f.read()
+    return data
+
