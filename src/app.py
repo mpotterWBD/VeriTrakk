@@ -3,10 +3,15 @@ from textual.widgets import Header, Footer, Label, Select, Rule
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.containers import Container, Horizontal, VerticalScroll
-from .storage import file_parser
+from .storage import file_parser, number_of_files
+# from storage import file_parser, number_of_files
+
+FILES = file_parser()
+NOF = number_of_files(FILES)
 
 class MainScreen(Screen):
     TITLE = "WELCOME TO VERITRAKK"
+    
 
     def compose(self)-> ComposeResult:
         yield Header()
@@ -14,10 +19,14 @@ class MainScreen(Screen):
             
             select_cont = Container(id="select_cont")
             select_cont.border_title = "SELECT PROCESSES"
+
+          
             with select_cont:
 
-                options = [(x,x) for x in file_parser()]
-                select_proc = Select(options,id="process_select",compact=True,prompt="Select a process",allow_blank=True)
+                options = [(x,x) for x in FILES]
+                select_proc = Select(options,id="process_select",compact=True,prompt="Select",allow_blank=True)
+
+                select_cont.styles.height=NOF+4
                 yield select_proc
                  
         yield Footer()
@@ -25,13 +34,10 @@ class MainScreen(Screen):
     def on_screen_resume(self) -> None:
         select = self.query_one("#process_select", Select)
         select.clear()
+
+   
+     
         
-        # select.value = Select.BLANK
-
-    # def on_screen_resume(self):
-    #     select = self.query_one("#process_select", Select)
-    #     select.value = Select.BLANK
-
 class ProcessScreen(Screen):
     
     TITLE = "WELCOME TO VERITRAKK"
@@ -56,6 +62,7 @@ class ProcessScreen(Screen):
         self.app.pop_screen()
 
 class veritrakk(App):
+
     CSS_PATH = "veritrakk.tcss"
 
     BINDINGS = [
@@ -74,6 +81,9 @@ class veritrakk(App):
             self.app.push_screen("process_screen")
 
     def on_mount(self) -> None:
+        
         self.push_screen(MainScreen())
       
+
+app = veritrakk()
 veritrakk().run()

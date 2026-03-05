@@ -12,8 +12,8 @@ Header {
 
 #select_cont {
     border: double darkkhaki;
-    height: 5;
     width: 100%;
+    padding: 0;
 }
 
 #right {

@@ -19,3 +19,9 @@ def file_reader(file_name):
         data = f.read()
     return data
 
+def number_of_files(files):
+    count = 0
+    for x in files:
+        count = count + 1
+    return count
+
