@@ -17,5 +17,8 @@ pip install textual
 
 python -m src
 
+##Textual Development Resources
+https://textual.textualize.io/
+
 
 
