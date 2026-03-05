@@ -31,14 +31,14 @@ Header {
 }
 
 #stage_proc_l{
-    border: double chocolate;
-    height: 5;
+    border: double darkseagreen;
+    height: 100%;
     width: 50%;
 }
 
 #stage_proc_r{
-    border: double chocolate;
-    height: 5;
+    border: double darkseagreen;
+    height: 100%;
     width: 50%;
 }
 
@@ -46,4 +46,10 @@ Header {
     padding: 0;
     margin: 0;
     color: cadetblue
+}
+
+#compose_header{
+    background: darkkhaki;
+    height: 1;
+    text-style: bold;
 }
