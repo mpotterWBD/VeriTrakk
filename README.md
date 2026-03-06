@@ -1,6 +1,5 @@
 # VeriTrakk 
 ###### Powered by Westbound Designs
-___
 
 ## Project Description
 This application is a structured process-control checklist tool that enforces and documents the completion of required steps prior to process finalization
@@ -19,7 +18,7 @@ This application is a structured process-control checklist tool that enforces an
 
 2. python -m src
 
-##Textual Development Resources
+### Textual Development Resources
 https://textual.textualize.io/
 
 
