@@ -53,3 +53,9 @@ Header {
     height: 1;
     text-style: bold;
 }
+
+#process_cont{
+    border: double darkkhaki;
+    width: 20%;
+    padding: 0;
+}
