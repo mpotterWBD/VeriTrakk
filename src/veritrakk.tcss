@@ -1,3 +1,8 @@
+
+#ms_content_switcher {
+    width: 20%;
+}
+
 Label {
     border: darkkhaki;
     width: 50%;
@@ -8,12 +13,7 @@ Header {
     background: darkkhaki;
     height: 1;
     text-style: bold;
-}
-
-#select_cont {
-    border: double darkkhaki;
-    height: 5;
-    width: 100%;
+    color: black;
 }
 
 #right {
@@ -27,19 +27,37 @@ Header {
 }
 
 #process_select:focus {
+}
 
+#process_builder{
+    border: double darkkhaki;
+    width: 80%;
+}
+
+#process_cont{
+    border: double darkkhaki;
+    padding: 0;
+}
+
+#select_cont {
+    border: double darkkhaki;
 }
 
 #stage_proc_l{
-    border: double chocolate;
-    height: 5;
+    border: double darkseagreen;
+    height: 100%;
     width: 50%;
 }
 
 #stage_proc_r{
-    border: double chocolate;
-    height: 5;
+    border: double darkseagreen;
+    height: 100%;
     width: 50%;
+}
+
+#tab_placeholder{
+    width: 100%;
+    height: 1;
 }
 
 #header_rule{
@@ -47,3 +65,10 @@ Header {
     margin: 0;
     color: cadetblue
 }
+
+#compose_header{
+    background: darkkhaki;
+    height: 1;
+    text-style: bold;
+}
+

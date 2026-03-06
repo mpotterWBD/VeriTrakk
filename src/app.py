@@ -1,58 +1,100 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Label, Select, Rule
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, VerticalScroll
-from .storage import file_parser
+from textual.screen import Screen
+from textual.containers import Container, Horizontal, VerticalScroll, Vertical
+from .storage import file_parser, number_of_files
 
-class veritrakk(App):
-    CSS_PATH = "veritrakk.tcss"
-    BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("b", "back", "Back")
-    ]
+FILES = file_parser()
+NOF = number_of_files(FILES)
 
-
+class MainScreen(Screen):
     TITLE = "WELCOME TO VERITRAKK"
 
-    def compose(self) -> ComposeResult:
+    BINDINGS = [
+        Binding("b", "back", "Back"),
+    ]
+    
+    def compose(self)-> ComposeResult:
         yield Header()
 
-        yield Rule(line_style="double", id="header_rule")
+        with Vertical():
 
-        with Horizontal():
-            stage_proc_l = Container(id="stage_proc_l")
-            stage_proc_r = Container(id="stage_proc_r")
-            stage_proc_l.border_title = "PROCESS TREE"
-            stage_proc_r.border_title = "PROCESS DETAILS"
+#TABS START
+#--------------------------------------------------------------------------------------
+            with Container(id="tab_placeholder"):
+                yield Placeholder("SELECT TABS GO HERE")
+#TABS END
+#--------------------------------------------------------------------------------------
 
-            yield stage_proc_l
-            yield stage_proc_r
-            select_cont = Container(id="select_cont")
-            select_cont.border_title = "SELECT PROCESSES"
-            with select_cont:
+            with Horizontal():
+#CONTENTSWITCHER START
+#--------------------------------------------------------------------------------------
+                with ContentSwitcher(initial="select_cont",id="ms_content_switcher"):
+#SELECT CODE START
+#--------------------------------------------------------------------------------------
+                    with Container(id="select_cont"):   
 
-                select_proc = Select(((x,x) for x in file_parser()),id="process_select",compact=True)
-                yield select_proc
-         
+                        options = [(x,x) for x in FILES]
+                        yield Select(
+                            options,
+                            id="process_select",
+                            compact=True,
+                            prompt="Select",
+                            allow_blank=True
+                        )
+#SELECT CODE END
+#--------------------------------------------------------------------------------------
+                    with Container(id="process_cont"):
+                        yield Placeholder("TREE GOES HERE")
+#CONTENTSWITCHER END
+#--------------------------------------------------------------------------------------
+                with Container(id="process_builder"):
+                    yield Placeholder("PROCESS BUILDER GOES HERE")            
         yield Footer()
-    
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if(event.select.id == "process_select"):
-            self.query_one("#select_cont").display = "none"
-            self.query_one("#stage_proc_l").display = "block"
-            self.query_one("#stage_proc_r").display = "block"
-        # if(self.query_one("#process_select").value != None):
 
     def action_back(self) -> None:
-        select_proc = self.query_one("#process_select")
-        left = self.query_one("#select_cont")
-        left.display = "block"
-        self.query_one("#stage_proc_l").display = "none"
-        self.query_one("#stage_proc_r").display = "none"
-        self.call_after_refresh(select_proc.focus)
+        self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
+        select = self.query_one("#process_select", Select).focus()
+        select.clear()
 
     def on_mount(self) -> None:
-        self.query_one("#stage_proc_l").display = "none"
-        self.query_one("#stage_proc_r").display = "none"
+        select_cont = self.query_one("#select_cont", Container)
+        select_cont.border_title = "SELECT PROCESSES"
+        select_cont.styles.height=NOF+4
+
+        process_cont = self.query_one("#process_cont", Container)
+        process_cont.border_title = "PROCESS TREE"
+
+        process_builder = self.query_one("#process_builder")
+        process_builder.border_title = "PROCESS BUILDER"
+        process_builder.styles.height=NOF+4
+
+    def on_screen_resume(self) -> None:
+        select = self.query_one("#process_select", Select)
+        select.clear()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if(event.select.is_blank()):
+            return
+        if(event.select.id == "process_select"):
+            self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_cont"
+    
+class veritrakk(App):
+
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+    ]
+
+    CSS_PATH = "veritrakk.tcss"
+
+    SCREENS = {
+        "main_screen": MainScreen,
+    }
+
+    def on_mount(self) -> None:
+        self.push_screen(MainScreen())
       
+
+app = veritrakk()
 veritrakk().run()

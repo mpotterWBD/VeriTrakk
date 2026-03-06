@@ -5,11 +5,20 @@ This application is a structured process-control checklist tool that enforces an
 
 git clone https://github.com/mpotterWBD/VeriTrakk.git
 
-download Visual Studio Code
+# download Visual Studio Code
 
-Open Folder VeriTrakk
+# open veritrak directory
 
 # install textual
 pip install textual
+
+##Run the APP
+# in any terminal, while in the veritrakk directory
+
+python -m src
+
+##Textual Development Resources
+https://textual.textualize.io/
+
 
 
