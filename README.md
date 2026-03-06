@@ -1,21 +1,23 @@
-# VeriTrakk
+# VeriTrakk 
+###### Powered by Westbound Designs
+___
+
+## Project Description
 This application is a structured process-control checklist tool that enforces and documents the completion of required steps prior to process finalization
 
-##Development Setup
+### Development Setup
 
-git clone https://github.com/mpotterWBD/VeriTrakk.git
+1. git clone https://github.com/mpotterWBD/VeriTrakk.git
 
-# download Visual Studio Code
+2. download Visual Studio Code
 
-# open veritrak directory
+3. pip install textual
 
-# install textual
-pip install textual
+### Run the APP
 
-##Run the APP
-# in any terminal, while in the veritrakk directory
+1. In any terminal, while in the veritrakk directory
 
-python -m src
+2. python -m src
 
 ##Textual Development Resources
 https://textual.textualize.io/
