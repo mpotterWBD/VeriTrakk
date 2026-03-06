@@ -12,7 +12,7 @@ Header {
 
 #select_cont {
     border: double darkkhaki;
-    width: 100%;
+    width: 20%;
     padding: 0;
 }
 
