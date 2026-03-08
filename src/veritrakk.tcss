@@ -16,12 +16,6 @@ Header {
     color: black;
 }
 
-#right {
-    border: double darkkhaki;
-    height: 5;
-    width: 75%;
-}
-
 #process_select{
     color: darkkhaki;
 }
@@ -30,30 +24,19 @@ Header {
 }
 
 #process_builder{
-    border: double darkkhaki;
+    border: double darkseagreen;
     width: 80%;
 }
 
 #process_cont{
-    border: double darkkhaki;
+    border: double darkseagreen;
     padding: 0;
 }
 
 #select_cont {
-    border: double darkkhaki;
+    border: double darkseagreen;
 }
 
-#stage_proc_l{
-    border: double darkseagreen;
-    height: 100%;
-    width: 50%;
-}
-
-#stage_proc_r{
-    border: double darkseagreen;
-    height: 100%;
-    width: 50%;
-}
 
 #tab_placeholder{
     width: 100%;

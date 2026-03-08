@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
@@ -28,6 +28,7 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
 
             with Horizontal():
+                
 #CONTENTSWITCHER START
 #--------------------------------------------------------------------------------------
                 with ContentSwitcher(initial="select_cont",id="ms_content_switcher"):
@@ -46,11 +47,18 @@ class MainScreen(Screen):
 #SELECT CODE END
 #--------------------------------------------------------------------------------------
                     with Container(id="process_cont"):
-                        yield Placeholder("TREE GOES HERE")
+                        prc_tree: Tree[str] = Tree("Main Process", id="process_tree")
+                        prc_tree.root.expand()
+                        characters = prc_tree.root.add("Subprocess", expand=True)
+                        characters.add_leaf("SubSubprocess")
+                        characters.add_leaf("SubSubprocess")
+                        characters.add_leaf("SubSubprocess")
+                        yield prc_tree
 #CONTENTSWITCHER END
 #--------------------------------------------------------------------------------------
                 with Container(id="process_builder"):
-                    yield Placeholder("PROCESS BUILDER GOES HERE")            
+                    yield Placeholder("PROCESS BUILDER GOES HERE")         
+
         yield Footer()
 
     def action_back(self) -> None:
