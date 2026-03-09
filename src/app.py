@@ -3,7 +3,7 @@ from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files
+from .storage import file_parser, number_of_files, file_reader
 
 FILES = file_parser()
 NOF = number_of_files(FILES)
@@ -19,7 +19,7 @@ class MainScreen(Screen):
         Binding("b", "back", "Back"),
     
     ]
-    
+
     def compose(self)-> ComposeResult:
         yield Header()
 
@@ -55,10 +55,15 @@ class MainScreen(Screen):
                         prc_tree: Tree[str] = Tree("Main Process", id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
-                        characters = prc_tree.root.add("Subprocess", expand=True)
-                        characters.add_leaf("SubSubprocess")
-                        characters.add_leaf("SubSubprocess")
-                        characters.add_leaf("SubSubprocess")
+
+                        for x in file_reader("test_proc.prcss"):
+                            prc_tree.root.add_leaf("item1")
+                        # prc_tree.add_json(data,node=None)
+                        # prc_tree.root.expand_all()
+                        # characters = prc_tree.root.add("Subprocess", expand=True)
+                        # characters.add_leaf("SubSubprocess")
+                        # characters.add_leaf("SubSubprocess")
+                        # characters.add_leaf("SubSubprocess")
                         yield prc_tree
 #CONTENTSWITCHER END
 #--------------------------------------------------------------------------------------
@@ -67,6 +72,8 @@ class MainScreen(Screen):
 
         yield Footer()
    
+ 
+
     def action_back(self) -> None:
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
         select = self.query_one("#process_select", Select).focus()
@@ -83,6 +90,8 @@ class MainScreen(Screen):
             tree.action_cursor_up()
     
     def on_mount(self) -> None:
+        self.log("STUFF = ", file_reader("test_proc.prcss"))
+
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
         select_cont.styles.height=NOF+4
