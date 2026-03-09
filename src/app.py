@@ -14,6 +14,7 @@ class MainScreen(Screen):
     BINDINGS = [
         Binding("up", "select_up"),
         Binding("down", "select_down"),
+        Binding("b", "back", "Back"),
     
     ]
     
@@ -63,6 +64,11 @@ class MainScreen(Screen):
                     yield Placeholder("PROCESS BUILDER GOES HERE")         
 
         yield Footer()
+   
+    def action_back(self) -> None:
+        self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
+        select = self.query_one("#process_select", Select).focus()
+        select.clear()
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -101,7 +107,6 @@ class veritrakk(App):
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("b", "back", "Back"),
     ]
 
     CSS_PATH = "veritrakk.tcss"
