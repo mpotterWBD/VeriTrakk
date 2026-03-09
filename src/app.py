@@ -12,7 +12,9 @@ class MainScreen(Screen):
     TITLE = "WELCOME TO VERITRAKK"
 
     BINDINGS = [
-        Binding("b", "back", "Back"),
+        Binding("up", "select_up"),
+        Binding("down", "select_down"),
+    
     ]
     
     def compose(self)-> ComposeResult:
@@ -49,6 +51,7 @@ class MainScreen(Screen):
                     with Container(id="process_cont"):
                         prc_tree: Tree[str] = Tree("Main Process", id="process_tree")
                         prc_tree.root.expand()
+                        prc_tree.guide_depth = 5
                         characters = prc_tree.root.add("Subprocess", expand=True)
                         characters.add_leaf("SubSubprocess")
                         characters.add_leaf("SubSubprocess")
@@ -61,11 +64,16 @@ class MainScreen(Screen):
 
         yield Footer()
 
-    def action_back(self) -> None:
-        self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
-        select = self.query_one("#process_select", Select).focus()
-        select.clear()
-
+    def action_select_down(self) -> None:
+        tree = self.query_one("#process_tree")
+        if self.query_one("#ms_content_switcher").current == "process_cont":
+            tree.action_cursor_down()
+    
+    def action_select_up(self) -> None:
+        tree = self.query_one("#process_tree")
+        if self.query_one("#ms_content_switcher").current == "process_cont":
+            tree.action_cursor_up()
+    
     def on_mount(self) -> None:
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
@@ -86,12 +94,14 @@ class MainScreen(Screen):
         if(event.select.is_blank()):
             return
         if(event.select.id == "process_select"):
+            print("OPENED PROCESS_CONT")
             self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_cont"
     
 class veritrakk(App):
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
+        Binding("b", "back", "Back"),
     ]
 
     CSS_PATH = "veritrakk.tcss"
