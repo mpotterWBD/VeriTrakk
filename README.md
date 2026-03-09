@@ -18,8 +18,10 @@ This application is a structured process-control checklist tool that enforces an
 
 2. python -m src
 
-### Textual Development Resources
+## Textual Development Resources
+
 https://textual.textualize.io/
+https://textual.textualize.io/styles/
 
 
 
