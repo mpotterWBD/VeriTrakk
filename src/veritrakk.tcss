@@ -33,6 +33,19 @@ Header {
     padding: 0;
 }
 
+#process_tree .tree--cursor{
+    background: blue 0%;
+    color: cornflowerblue;
+}
+
+#process_tree .tree--label{
+   
+}
+
+#process_tree .tree--guides{
+    color: darkseagreen
+}
+
 #select_cont {
     border: double darkseagreen;
 }
