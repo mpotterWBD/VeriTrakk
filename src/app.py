@@ -11,6 +11,8 @@ NOF = number_of_files(FILES)
 class MainScreen(Screen):
     TITLE = "WELCOME TO VERITRAKK"
 
+    
+
     BINDINGS = [
         Binding("up", "select_up"),
         Binding("down", "select_down"),
@@ -104,7 +106,7 @@ class MainScreen(Screen):
             self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_cont"
     
 class veritrakk(App):
-
+    ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
         Binding("q", "quit", "Quit"),
     ]
