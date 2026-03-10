@@ -17,7 +17,8 @@ def file_parser():
 def file_reader(file_name):
     data = []
     with open(data_dir / file_name, 'r') as f:
-        data.append(f.read())
+        # print(f.readlines())
+        data = f.readlines()
     return data
 
 def number_of_files(files):
