@@ -55,15 +55,6 @@ class MainScreen(Screen):
                         prc_tree: Tree[str] = Tree("Main Process", id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
-
-                        for x in file_reader("test_proc.prcss"):
-                            prc_tree.root.add_leaf("item1")
-                        # prc_tree.add_json(data,node=None)
-                        # prc_tree.root.expand_all()
-                        # characters = prc_tree.root.add("Subprocess", expand=True)
-                        # characters.add_leaf("SubSubprocess")
-                        # characters.add_leaf("SubSubprocess")
-                        # characters.add_leaf("SubSubprocess")
                         yield prc_tree
 #CONTENTSWITCHER END
 #--------------------------------------------------------------------------------------
@@ -108,8 +99,17 @@ class MainScreen(Screen):
         select.clear()
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        self.select_data = self.query_one("#process_select").value
+        self.log("SELECTED = ", self.select_data)
+        tree = self.query_one("#process_tree")
+        if self.select_data is Select.NULL:
+            return
+        data = file_reader(self.select_data)
+        for x in data:    
+            tree.root.add_leaf(x)
         if(event.select.is_blank()):
             return
+        
         if(event.select.id == "process_select"):
             print("OPENED PROCESS_CONT")
             self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_cont"
