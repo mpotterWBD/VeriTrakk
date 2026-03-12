@@ -52,7 +52,8 @@ class MainScreen(Screen):
 #SELECT CODE END
 #--------------------------------------------------------------------------------------
                     with Container(id="process_cont"):
-                        prc_tree: Tree[str] = Tree("Main Process", id="process_tree")
+                        self.tree_name = ""
+                        prc_tree: Tree[str] = Tree(self.tree_name, id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
                         yield prc_tree
@@ -69,7 +70,8 @@ class MainScreen(Screen):
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
         select = self.query_one("#process_select", Select).focus()
         select.clear()
-        self.query_one("#process_tree").reset("#process_tree")
+
+        self.query_one("#process_tree").reset(self.tree_name)
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -108,7 +110,8 @@ class MainScreen(Screen):
             return
         data = file_reader(self.select_data)
 
-        for x in data:    
+        for x in data: 
+            self.tree_name = data[0]
             tree.root.add_leaf(x)
         if(event.select.is_blank()):
             return
