@@ -69,6 +69,7 @@ class MainScreen(Screen):
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
         select = self.query_one("#process_select", Select).focus()
         select.clear()
+        self.query_one("#process_tree").reset("#process_tree")
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -102,9 +103,11 @@ class MainScreen(Screen):
         self.select_data = self.query_one("#process_select").value
         self.log("SELECTED = ", self.select_data)
         tree = self.query_one("#process_tree")
-        if self.select_data is Select.NULL:
+
+        if self.select_data is Select.NULL: #Handles select changes when in process and back is pressed
             return
         data = file_reader(self.select_data)
+
         for x in data:    
             tree.root.add_leaf(x)
         if(event.select.is_blank()):
