@@ -31,13 +31,7 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
 
             with Horizontal():
-                
-#CONTENTSWITCHER START
-#--------------------------------------------------------------------------------------
-                with ContentSwitcher(initial="select_cont",id="ms_content_switcher"):
-#SELECT CODE START
-#--------------------------------------------------------------------------------------
-                    with Container(id="select_cont"):   
+                with Container(id="select_cont"):   
 
                         options = [(x,x) for x in FILES]
                         yield Select(
@@ -47,23 +41,25 @@ class MainScreen(Screen):
                             prompt="Select",
                             allow_blank=True
                         )
-#SELECT CODE END
-#--------------------------------------------------------------------------------------
+
+                with ContentSwitcher(initial="process_builder",id="ms_content_switcher"):
+                    with Container(id="process_builder"):
+                        yield Placeholder("PROCESS BUILDER GOES HERE")    
+
                     with Container(id="process_cont"):
                         self.tree_name = ""
                         prc_tree: Tree[str] = Tree("Process_Tree", id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
                         yield prc_tree
+
 #CONTENTSWITCHER END
 #--------------------------------------------------------------------------------------
-                with Container(id="process_builder"):
-                    yield Placeholder("PROCESS BUILDER GOES HERE")         
 
         yield Footer()
    
     def action_back(self) -> None:
-        self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
+        self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_builder"
         select = self.query_one("#process_select", Select).focus()
         select.clear()
 
@@ -84,15 +80,14 @@ class MainScreen(Screen):
 
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
-        select_cont.styles.height=NOF+4
+        
 
         process_cont = self.query_one("#process_cont", Container)
         process_cont.border_title = "PROCESS TREE"
 
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
-        process_builder.styles.height=NOF+4
-
+        
     def on_screen_resume(self) -> None:
         select = self.query_one("#process_select", Select)
         select.clear()
@@ -117,7 +112,9 @@ class MainScreen(Screen):
         
         if(event.select.id == "process_select"):
             print("OPENED PROCESS_CONT")
-            self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_cont"
+            self.query_one("#ms_content_switcher").current = "process_cont"
+        
+        self.query_one("#process_tree").focus()
     
 class veritrakk(App):
     ENABLE_COMMAND_PALETTE = False
@@ -133,7 +130,6 @@ class veritrakk(App):
 
     def on_mount(self) -> None:
         self.push_screen(MainScreen())
-      
 
 app = veritrakk()
 veritrakk().run()
