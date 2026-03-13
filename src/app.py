@@ -11,8 +11,6 @@ NOF = number_of_files(FILES)
 class MainScreen(Screen):
     TITLE = "WELCOME TO VERITRAKK"
 
-    
-
     BINDINGS = [
         Binding("up", "select_up"),
         Binding("down", "select_down"),
@@ -53,7 +51,7 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
                     with Container(id="process_cont"):
                         self.tree_name = ""
-                        prc_tree: Tree[str] = Tree(self.tree_name, id="process_tree")
+                        prc_tree: Tree[str] = Tree("Process_Tree", id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
                         yield prc_tree
@@ -64,8 +62,6 @@ class MainScreen(Screen):
 
         yield Footer()
    
- 
-
     def action_back(self) -> None:
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "select_cont"
         select = self.query_one("#process_select", Select).focus()
@@ -106,12 +102,15 @@ class MainScreen(Screen):
         self.log("SELECTED = ", self.select_data)
         tree = self.query_one("#process_tree")
 
-        if self.select_data is Select.NULL: #Handles select changes when in process and back is pressed
+        if self.select_data is Select.NULL:     #Handles select changes when in process and back is pressed
             return
+        
         data = file_reader(self.select_data)
+        
+        tree.root.label = data[0]               #Sets the first line in .prcss file as the main node
+        data.remove(data[0])                    #Deletes the first line so all the other lines can be leaves
 
         for x in data: 
-            self.tree_name = data[0]
             tree.root.add_leaf(x)
         if(event.select.is_blank()):
             return
