@@ -3,4 +3,4 @@ print("TESTING...")
 
 data = file_reader("test_proc.prcss")
 for x in data:
-    print(x)
+    print(x[0])

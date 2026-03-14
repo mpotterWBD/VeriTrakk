@@ -97,16 +97,23 @@ class MainScreen(Screen):
         self.log("SELECTED = ", self.select_data)
         tree = self.query_one("#process_tree")
 
-        if self.select_data is Select.NULL:     #Handles select changes when in process and back is pressed
+        if self.select_data is Select.NULL:         #Handles select changes when in process and back is pressed
             return
         
         data = file_reader(self.select_data)
         
-        tree.root.label = data[0]               #Sets the first line in .prcss file as the main node
-        data.remove(data[0])                    #Deletes the first line so all the other lines can be leaves
+        tree.root.label = data[0]                   #Sets the first line in .prcss file as the main node
+        data.remove(data[0])                        #Deletes the first line so all the other lines can be leaves
 
-        for x in data: 
-            tree.root.add_leaf(x)
+        for x in (data): 
+
+            if x[0] == '<':
+                current_node.add_leaf(x[1:])
+                current_node.expand_all()
+                
+            else:
+                current_node = tree.root.add(x)
+
         if(event.select.is_blank()):
             return
         
