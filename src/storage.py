@@ -1,4 +1,6 @@
+from asyncio.windows_events import NULL
 from pathlib import Path
+from tkinter.tix import Select
 
 working_dir = Path.cwd()
 data_dir = working_dir / 'data'
@@ -15,13 +17,15 @@ def file_parser():
     return file_names
         
 def file_reader(file_name):
-    with open(data_dir / file_name, 'r') as f:
-        data = f.read()
-    return data
+        with open(data_dir / file_name, 'r') as f:
+            data = f.readlines()
+        return data
 
 def number_of_files(files):
     count = 0
     for x in files:
         count = count + 1
     return count
+
+
 

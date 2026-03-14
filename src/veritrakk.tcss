@@ -1,6 +1,6 @@
 
 #ms_content_switcher {
-    width: 20%;
+    width: 100%;
 }
 
 Label {
@@ -25,11 +25,12 @@ Header {
 
 #process_builder{
     border: double darkseagreen;
-    width: 80%;
+    width: 85%;
 }
 
 #process_cont{
     border: double darkseagreen;
+    width: 85%;
     padding: 0;
 }
 
@@ -48,8 +49,8 @@ Header {
 
 #select_cont {
     border: double darkseagreen;
+    width: 15%;
 }
-
 
 #tab_placeholder{
     width: 100%;
