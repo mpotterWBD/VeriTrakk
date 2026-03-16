@@ -14,6 +14,8 @@ class MainScreen(Screen):
     BINDINGS = [
         Binding("up", "select_up"),
         Binding("down", "select_down"),
+        Binding("right", "select_right"),
+        Binding("left", "select_left"),
         Binding("b", "back", "Back"),
     
     ]
@@ -75,6 +77,21 @@ class MainScreen(Screen):
         if self.query_one("#ms_content_switcher").current == "process_cont":
             tree.action_cursor_up()
     
+    def action_select_right(self) -> None:
+        tree = self.query_one("#process_tree")
+        if self.query_one("#ms_content_switcher").current == "process_cont":
+            node = tree.cursor_node
+            node.label = node.label + "[SUCCESS]"
+            node.label.stylize("green")
+            node.set_label(node.label)
+            
+
+    def action_select_left(self) -> None:
+        tree = self.query_one("#process_tree")
+        if self.query_one("#ms_content_switcher").current == "process_cont":
+            node = tree.cursor_node
+            node.label.stylize("default")
+
     def on_mount(self) -> None:
         self.log("STUFF = ", file_reader("test_proc.prcss"))
 
