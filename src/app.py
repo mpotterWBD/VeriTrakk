@@ -81,15 +81,22 @@ class MainScreen(Screen):
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
             node = tree.cursor_node
-            node.label = node.label + "[SUCCESS]"
-            node.label.stylize("green")
-            node.set_label(node.label)
+            node_buff = node.label
+            if str(node_buff).count("[SUCCESS]") == 0:
+                node.label = "[SUCCESS]" + "    " + str(node_buff)
+                self.log(node.label)
+                node.label.stylize("green")
+                node.set_label(node.label)
             
-
     def action_select_left(self) -> None:
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
             node = tree.cursor_node
+            node_buff = node.label
+            new_label = str(node_buff).replace("[SUCCESS]    ","")
+            node.label = new_label
+            self.log(new_label)
+            
             node.label.stylize("default")
 
     def on_mount(self) -> None:
