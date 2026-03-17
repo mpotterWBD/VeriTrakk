@@ -27,5 +27,15 @@ def number_of_files(files):
         count = count + 1
     return count
 
+def save_success(label, file_name):
+    with open(data_dir / file_name, 'r') as f:
+        data = f.readlines()
+    for x in data:
+        print(x)
+        if x == label:
+            data.append("[S]")
+            print(data)
+     
+
 
 
