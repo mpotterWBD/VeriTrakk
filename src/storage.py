@@ -30,11 +30,26 @@ def number_of_files(files):
 def save_success(label, file_name):
     with open(data_dir / file_name, 'r') as f:
         data = f.readlines()
-    for x in data:
-        print(x)
-        if x == label:
-            data.append("[S]")
-            print(data)
+    
+    # Find and modify the line matching the label
+    modified_data = []
+    for line in data:
+        stripped_line = line.strip()
+        if stripped_line == label:
+            # Add [S] prefix with | delimiter
+            # Keep existing prefixes like [<] for subprocesses
+            if line.startswith("[S]"):
+                # Already has [S], keep as is
+                modified_data.append(line)
+            else:
+                # Add [S] prefix
+                modified_data.append(f"[S]|{line}")
+        else:
+            modified_data.append(line)
+    
+    # Write back to file
+    with open(data_dir / file_name, 'w') as f:
+        f.writelines(modified_data)
      
 
 
