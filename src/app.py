@@ -2,8 +2,9 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree
 from textual.binding import Binding
 from textual.screen import Screen
+from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S
 
 FILES = file_parser()
 NOF = number_of_files(FILES)
@@ -82,7 +83,11 @@ class MainScreen(Screen):
         if self.query_one("#ms_content_switcher").current == "process_cont":
             node = tree.cursor_node
             node_buff = node.label
-            if str(node_buff).count("[SUCCESS]") == 0:
+            set_S(str(node_buff), str(self.select_data))
+            # self.log("Label = ",node_buff)
+            # self.log("file = ",self.select_data)
+            self.log("node_buff=",node_buff)
+            if "[SUCCESS]" not in node_buff:
                 node.label = "[SUCCESS]" + "    " + str(node_buff)
                 self.log(node.label)
                 node.label.stylize("green")
@@ -93,11 +98,13 @@ class MainScreen(Screen):
         if self.query_one("#ms_content_switcher").current == "process_cont":
             node = tree.cursor_node
             node_buff = node.label
-            new_label = str(node_buff).replace("[SUCCESS]    ","")
-            node.label = new_label
-            self.log(new_label)
+            if "[SUCCESS]" in node_buff:
             
-            node.label.stylize("default")
+                new_label = str(node_buff).replace("[SUCCESS]    ","")
+                remove_S("[S]|" + str(new_label), str(self.select_data))
+                node.label = new_label
+                self.log(new_label)
+                node.label.stylize("default")
 
     def on_mount(self) -> None:
         self.log("STUFF = ", file_reader("test_proc.prcss"))
@@ -120,23 +127,35 @@ class MainScreen(Screen):
         self.select_data = self.query_one("#process_select").value
         self.log("SELECTED = ", self.select_data)
         tree = self.query_one("#process_tree")
-
-        if self.select_data is Select.NULL:         #Handles select changes when in process and back is pressed
+        #Handles select changes when in process and back is pressed
+        if self.select_data is Select.NULL:         
             return
         
         data = file_reader(self.select_data)
-        
-        tree.root.label = data[0]                   #Sets the first line in .prcss file as the main node
-        data.remove(data[0])                        #Deletes the first line so all the other lines can be leaves
+        #Sets the first line in .prcss file as the main node
+        tree.root.label = data[0]
+        #Deletes the first line so all the other lines can be leaves                   
+        data.remove(data[0])                        
 
+        #Populates Tree from file
         for x in (data): 
-
-            if x[0] == '<':
-                current_node.add_leaf(x[1:])
-                current_node.expand_all()
+            if "[>]" in x:
+                if "[S]" in x:
+                    node_buffer = Text("[SUCCESS]    " + x.replace("[>]|","").replace("[S]|",""))
+                    node_buffer.stylize("green")
+                    current_node.add_leaf(node_buffer)
+                    # current_node.label.stylize("green")
+                else:
+                    current_node.add_leaf(x.replace("[>]|",""))
+                    current_node.expand_all()
                 
             else:
-                current_node = tree.root.add(x)
+                #Store line into tree but removes status prefixes
+                if "[S]" in x:
+                    current_node = tree.root.add("[SUCCESS]    " + x.replace("[S]|",""))
+                    current_node.label.stylize("green")
+                else:
+                    current_node = tree.root.add(x)
 
         if(event.select.is_blank()):
             return
