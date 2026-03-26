@@ -114,6 +114,7 @@ class MainScreen(Screen):
                     parent_label = str(node.parent.label).replace("[SUCCESS]", "").strip()
                     node.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
                     set_S(str(parent_label), str(self.select_data))
+                    tree.move_cursor(node.parent)
 
             if node.parent and node.parent.parent:
                 parents_all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.parent.children)
@@ -186,6 +187,9 @@ class MainScreen(Screen):
             new_root_label = "[SUCCESS]    " + str(tree.root.label).replace("[S]|","")
             tree.root.label = new_root_label
             tree.root.label.stylize("green")
+            tree.root.collapse()
+        else:
+            tree.root.expand()
 
         #Deletes the first line so all the other lines can be leaves                   
         data.remove(data[0])                        
@@ -213,7 +217,7 @@ class MainScreen(Screen):
                     current_node.label.stylize("green")
                 else:
                     current_node = tree.root.add(x,allow_expand=False)
-
+        
         if(event.select.is_blank()):
             return
         
