@@ -1,5 +1,6 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree
+from textual.reactive import reactive
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static
 from textual.binding import Binding
 from textual.screen import Screen
 from rich.text import Text
@@ -9,8 +10,16 @@ from .storage import file_parser, number_of_files, file_reader, set_S, has_S, re
 FILES = file_parser()
 NOF = number_of_files(FILES)
 
+FIGLET = """
+ _    _ _______  ______ _____ _______  ______ _______ _     _ _     _
+  \  /  |______ |_____/   |      |    |_____/ |_____| |____/  |____/ 
+   \/   |______ |    \_ __|__    |    |    \_ |     | |    \_ |    \_
+                                                                     
+"""
+
 class MainScreen(Screen):
-    TITLE = "WELCOME TO VERITRAKK"
+    # TITLE = "WELCOME TO VERITRAKK"
+   
 
     BINDINGS = [
         Binding("up", "select_up"),
@@ -22,12 +31,15 @@ class MainScreen(Screen):
     ]
 
     def compose(self)-> ComposeResult:
-        yield Header()
+        yield Header(id="header")
+        # self.query_one("header").tall = True
 
         with Vertical():
 
 #TABS START
 #--------------------------------------------------------------------------------------
+            with Container (id="graphical_header"):
+                yield Static(content=FIGLET,id="figlet")
             with Container(id="tab_placeholder"):
                 yield Placeholder("SELECT TABS GO HERE")
 #TABS END
@@ -107,12 +119,14 @@ class MainScreen(Screen):
                 node.label.stylize("default")
 
     def on_mount(self) -> None:
+        self.title = "WELCOME TO VERITRAK"
+        self.sub_title = "Powered by Westbound Designs"
+
         self.log("STUFF = ", file_reader("test_proc.prcss"))
 
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
         
-
         process_cont = self.query_one("#process_cont", Container)
         process_cont.border_title = "PROCESS TREE"
 
@@ -141,21 +155,25 @@ class MainScreen(Screen):
         for x in (data): 
             if "[>]" in x:
                 if "[S]" in x:
+                    #Populates data that is successful and is a child
+                    current_node.allow_expand = True
                     node_buffer = Text("[SUCCESS]    " + x.replace("[>]|","").replace("[S]|",""))
                     node_buffer.stylize("green")
                     current_node.add_leaf(node_buffer)
                     # current_node.label.stylize("green")
                 else:
+                    #Populates data that is not successful and is a child
+                    current_node.allow_expand = True
                     current_node.add_leaf(x.replace("[>]|",""))
                     current_node.expand_all()
                 
             else:
                 #Store line into tree but removes status prefixes
                 if "[S]" in x:
-                    current_node = tree.root.add("[SUCCESS]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("[SUCCESS]    " + x.replace("[S]|",""))
                     current_node.label.stylize("green")
                 else:
-                    current_node = tree.root.add(x)
+                    current_node = tree.root.add(x,allow_expand=False)
 
         if(event.select.is_blank()):
             return
@@ -167,6 +185,7 @@ class MainScreen(Screen):
         self.query_one("#process_tree").focus()
     
 class veritrakk(App):
+
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
         Binding("q", "quit", "Quit"),
