@@ -1,11 +1,9 @@
-TEST PROCESS
-TASK #1
-TASK #2
-TASK #3
-TASK #4
-<SUBTASK #1
-<SUBTASK #2
-<SUBTASK #3
-TASK #5
-<SUBTASK #4
-<SUBTASK #5
+[S]|Get Focused
+[S]|Try and find peace
+[S]|[>]|look outside
+[S]|[>]|go fishing
+[S]|[>]|love kimberly
+[S]|[>]|cuddle rumples
+[S]|Wash the toes
+[S]|[>]|washem
+[S]|Walk in circles

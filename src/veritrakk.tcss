@@ -2,6 +2,11 @@
 #ms_content_switcher {
     width: 100%;
 }
+#graphical_header{
+     height: auto;
+     padding: 0;
+     margin: 0;
+}
 
 Label {
     border: darkkhaki;
@@ -14,6 +19,14 @@ Header {
     height: 1;
     text-style: bold;
     color: black;
+}
+
+#figlet{
+    text_align: center;
+    content-align: center middle;
+    color: lightsalmon;
+    background: black;
+    border: none;
 }
 
 #process_select{

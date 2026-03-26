@@ -27,7 +27,8 @@ def number_of_files(files):
         count = count + 1
     return count
 
-def save_success(label, file_name):
+#Appends the [S] status prefix to the specified line in the .prcss file
+def set_S(label, file_name):
     with open(data_dir / file_name, 'r') as f:
         data = f.readlines()
     
@@ -35,7 +36,17 @@ def save_success(label, file_name):
     modified_data = []
     for line in data:
         stripped_line = line.strip()
-        if stripped_line == label:
+        if "[>]" in stripped_line:
+            stripped_line = stripped_line.replace("[>]|","")
+            if stripped_line == label:
+                if "[S]" in line:
+                    modified_data.append(line)
+                else:
+                    modified_data.append(f"[S]|{line}")
+            else:
+                modified_data.append(line)
+
+        elif stripped_line == label:
             # Add [S] prefix with | delimiter
             # Keep existing prefixes like [<] for subprocesses
             if line.startswith("[S]"):
@@ -50,7 +61,47 @@ def save_success(label, file_name):
     # Write back to file
     with open(data_dir / file_name, 'w') as f:
         f.writelines(modified_data)
-     
 
+#Returns True if label contains [S] status prefix     
+def has_S(label, file_name):
+    with open(data_dir / file_name, 'r') as f:
+        data = f.readlines()
+    for line in data:
+        stripped_line = line.strip()
+        if "[S]" in stripped_line:
+            return True
+    return False
 
+def remove_S(label, file_name):
+    with open(data_dir / file_name, 'r') as f:
+        data = f.readlines()
+    
+    # Find and modify the line matching the label
+    modified_data = []
+    for line in data:
+        stripped_line = line.strip()
+        if "[>]" in stripped_line:
+            stripped_line = stripped_line.replace("[>]|","")
+            if stripped_line == label:
+                if "[S]" in line:
+                    modified_data.append(line.replace("[S]|",""))
+                else:
+                    modified_data.append(line)
+            else:
+                modified_data.append(line)
 
+        elif stripped_line == label:
+            # Add [S] prefix with | delimiter
+            # Keep existing prefixes like [<] for subprocesses
+            if "[S]" in stripped_line:
+                # Already has [S], keep as is
+                modified_data.append(line.replace("[S]|",""))
+            else:
+                # Removes [S] prefix
+                modified_data.append(line)
+        else:
+            modified_data.append(line)
+    
+    # Write back to file
+    with open(data_dir / file_name, 'w') as f:
+        f.writelines(modified_data)
