@@ -22,8 +22,9 @@ Header {
 }
 
 #figlet{
-    padding: 0;
-    margin: 0;
+    text_align: center;
+    content-align: center middle;
+    color: lightsalmon;
     background: black;
     border: none;
 }
