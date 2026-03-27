@@ -8,6 +8,15 @@ data_dir = working_dir / 'data'
 prcss_files = []
 file_names = []
 
+def file_parser_selected(new_path):
+    file_names = []
+    files = list(new_path.glob("*.prcss"))    
+
+    for x in files:
+        file_names.append(x.name)
+
+    return file_names
+
 def file_parser():
     files = list(data_dir.glob("*.prcss"))    
 

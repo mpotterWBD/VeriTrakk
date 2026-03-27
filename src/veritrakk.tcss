@@ -2,6 +2,10 @@
 #ms_content_switcher {
     width: 100%;
 }
+#file_cont {
+    border: double darkseagreen;
+    width: 15%;
+}
 #graphical_header{
      height: auto;
      padding: 0;
@@ -38,7 +42,7 @@ Header {
 
 #process_builder{
     border: double darkseagreen;
-    width: 85%;
+    width: 70%;
 }
 
 #process_cont{

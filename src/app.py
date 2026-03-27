@@ -1,13 +1,15 @@
 from textual.app import App, ComposeResult
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree
 from textual.binding import Binding
+from pathlib import Path
 from textual.screen import Screen
+from typing import Iterable
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected
 
-FILES = file_parser()
+FILES = []
 NOF = number_of_files(FILES)
 
 FIGLET = """
@@ -45,9 +47,11 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
 
             with Horizontal():
+                with Container(id="file_cont"):
+                    yield DirOnlyTree(Path.home(),id="file_tree")
                 with Container(id="select_cont"):   
 
-                        options = [(x,x) for x in FILES]
+                        options = []
                         yield Select(
                             options,
                             id="process_select",
@@ -55,7 +59,6 @@ class MainScreen(Screen):
                             prompt="Select",
                             allow_blank=True
                         )
-
                 with ContentSwitcher(initial="process_builder",id="ms_content_switcher"):
                     with Container(id="process_builder"):
                         yield Placeholder("PROCESS BUILDER GOES HERE")    
@@ -71,13 +74,26 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
 
         yield Footer()
-   
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        path = event.path
+        matches = list(path.glob("*.prcss"))
+        if matches:
+            files = file_parser_selected(path)
+            options = [(x, x) for x in files]
+            self.query_one("#process_select", Select).set_options(options)
+            self.query_one("#process_select", Select).focus()
+            
     def action_back(self) -> None:
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_builder"
         select = self.query_one("#process_select", Select).focus()
         select.clear()
 
         self.query_one("#process_tree").reset(self.tree_name)
+
+        if self.app.focused is self.query_one("#process_select"):
+            self.query_one("#file_tree").focus()
+            options = []
+            self.query_one("#process_select", Select).set_options(options)
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -149,9 +165,6 @@ class MainScreen(Screen):
                 node.parent.parent.label = parents_parent_label
                 node.parent.parent.label.stylize("default")
                 
-                
-
-
     def on_mount(self) -> None:
         self.title = "WELCOME TO VERITRAK"
         self.sub_title = "Powered by Westbound Designs"
@@ -226,6 +239,11 @@ class MainScreen(Screen):
             self.query_one("#ms_content_switcher").current = "process_cont"
         
         self.query_one("#process_tree").focus()
+        
+
+class DirOnlyTree(DirectoryTree):
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if p.is_dir()] 
     
 class veritrakk(App):
 
