@@ -35,21 +35,21 @@ class MainScreen(Screen):
         yield Header(id="header")
         # self.query_one("header").tall = True
 
-        with Vertical():
+        with Vertical(id="main_panel"):
 
 #TABS START
 #--------------------------------------------------------------------------------------
             with Container (id="graphical_header"):
                 yield Static(content=FIGLET,id="figlet")
+
             with Container(id="tab_placeholder"):
                 yield Placeholder("SELECT TABS GO HERE")
 #TABS END
 #--------------------------------------------------------------------------------------
 
-            with Horizontal():
-                with Container(id="file_cont"):
-                    yield DirOnlyTree(Path.home(),id="file_tree")
-                with Container(id="select_cont"):   
+            with Horizontal(id="data_panel"):
+                with Vertical(id="left_panel"):
+                    with Container(id="select_cont"):   
 
                         options = []
                         yield Select(
@@ -59,6 +59,12 @@ class MainScreen(Screen):
                             prompt="Select",
                             allow_blank=True
                         )
+
+                    with Container(id="file_cont"):
+                        yield DirOnlyTree(Path.home(),id="file_tree")
+
+                  
+
                 with ContentSwitcher(initial="process_builder",id="ms_content_switcher"):
                     with Container(id="process_builder"):
                         yield Placeholder("PROCESS BUILDER GOES HERE")    
@@ -79,21 +85,27 @@ class MainScreen(Screen):
         matches = list(path.glob("*.prcss"))
         if matches:
             files = file_parser_selected(path)
+            nof = number_of_files(files)
             options = [(x, x) for x in files]
+            select_cont = self.query_one("#select_cont")
+            # select_cont.styles.height = nof * 2
+            select_cont.styles.height = 4 + nof
+            self.log("number of files = " + str(nof))
             self.query_one("#process_select", Select).set_options(options)
             self.query_one("#process_select", Select).focus()
+
             
     def action_back(self) -> None:
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_builder"
         select = self.query_one("#process_select", Select).focus()
+        select_cont = self.query_one("#select_cont")
         select.clear()
 
         self.query_one("#process_tree").reset(self.tree_name)
 
         if self.app.focused is self.query_one("#process_select"):
+            select_cont.styles.height = "auto"
             self.query_one("#file_tree").focus()
-            options = []
-            self.query_one("#process_select", Select).set_options(options)
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -179,6 +191,13 @@ class MainScreen(Screen):
 
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
+
+        # file_cont = self.query_one("#file_cont")
+        # self.log("BORDER = ", file_cont.styles.border)
+        # self.log("SIZE = ", file_cont.size)
+        # self.log("REGION = ", file_cont.region)
+
+        self.query_one("#file_tree").focus()
         
     def on_screen_resume(self) -> None:
         select = self.query_one("#process_select", Select)
