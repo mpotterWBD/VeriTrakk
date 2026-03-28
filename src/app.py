@@ -7,7 +7,7 @@ from textual.screen import Screen
 from typing import Iterable
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -82,13 +82,14 @@ class MainScreen(Screen):
         yield Footer()
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         path = event.path
+        self.root = path
         matches = list(path.glob("*.prcss"))
         if matches:
+            save_root(str(path))
             files = file_parser_selected(path)
             nof = number_of_files(files)
             options = [(x, x) for x in files]
             select_cont = self.query_one("#select_cont")
-            # select_cont.styles.height = nof * 2
             select_cont.styles.height = 4 + nof
             self.log("number of files = " + str(nof))
             self.query_one("#process_select", Select).set_options(options)
@@ -128,8 +129,8 @@ class MainScreen(Screen):
 
             # applies only to nodes that are not successful and nodes that dont have children
             if "[SUCCESS]" not in node_buff and len(node.children) == 0:
-                set_S(str(node_buff), str(self.select_data))
-                node.label = "[SUCCESS]" + "    " + str(node_buff)
+                set_S(str(node_buff), self.root, str(self.select_data))
+                node.label = "  [SUCCESS]  " + "  " + str(node_buff)
                 self.log(node.label)
                 node.label.stylize("green")
                 node.set_label(node.label)
@@ -141,7 +142,7 @@ class MainScreen(Screen):
                     node.parent.collapse()
                     parent_label = str(node.parent.label).replace("[SUCCESS]", "").strip()
                     node.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
-                    set_S(str(parent_label), str(self.select_data))
+                    set_S(str(parent_label), self.root, str(self.select_data))
                     tree.move_cursor(node.parent)
 
             if node.parent and node.parent.parent:
@@ -150,7 +151,7 @@ class MainScreen(Screen):
                     node.parent.parent.collapse()
                     parents_parent_label = str(node.parent.parent.label).replace("[SUCCESS]", "").strip()
                     node.parent.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
-                    set_S(str(parents_parent_label), str(self.select_data))
+                    set_S(str(parents_parent_label), self.root,str(self.select_data))
         
             
     def action_select_left(self) -> None:
@@ -159,21 +160,21 @@ class MainScreen(Screen):
             node = tree.cursor_node
             node_buff = node.label
             #Only applies to nodes with success and nodes with no children
-            if "[SUCCESS]" in node_buff and len(node.children) == 0:
-                new_label = str(node_buff).replace("[SUCCESS]    ","")
-                remove_S("[S]|" + str(new_label), str(self.select_data))
+            if "  [SUCCESS]" in node_buff and len(node.children) == 0:
+                new_label = str(node_buff).replace("  [SUCCESS]    ","")
+                remove_S("[S]|" + str(new_label), self.root, str(self.select_data))
                 node.label = new_label
                 node.label.stylize("default")
 
             if node.parent:
-                parent_label = str(node.parent.label).replace("[SUCCESS]", "").strip()
-                remove_S("[S]|" + str(parent_label), str(self.select_data))
+                parent_label = str(node.parent.label).replace("[SUCCESS]    ", "").strip()
+                remove_S("[S]|" + str(parent_label), self.root, str(self.select_data))
                 node.parent.label = parent_label
                 node.parent.label.stylize("default")
 
             if node.parent and node.parent.parent:
                 parents_parent_label = str(node.parent.parent.label).replace("[SUCCESS]", "").strip()
-                remove_S("[S]|" + str(parents_parent_label), str(self.select_data))
+                remove_S("[S]|" + str(parents_parent_label), self.root, str(self.select_data))
                 node.parent.parent.label = parents_parent_label
                 node.parent.parent.label.stylize("default")
                 
@@ -181,7 +182,7 @@ class MainScreen(Screen):
         self.title = "WELCOME TO VERITRAK"
         self.sub_title = "Powered by Westbound Designs"
 
-        self.log("STUFF = ", file_reader("test_proc.prcss"))
+        # self.log("STUFF = ", file_reader("test_proc.prcss"))
 
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
@@ -191,11 +192,6 @@ class MainScreen(Screen):
 
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
-
-        # file_cont = self.query_one("#file_cont")
-        # self.log("BORDER = ", file_cont.styles.border)
-        # self.log("SIZE = ", file_cont.size)
-        # self.log("REGION = ", file_cont.region)
 
         self.query_one("#file_tree").focus()
         
@@ -211,7 +207,7 @@ class MainScreen(Screen):
         if self.select_data is Select.NULL:         
             return
         
-        data = file_reader(self.select_data)
+        data = file_reader(self.root, self.select_data)
         #Sets the first line in .prcss file as the main node
         tree.root.label = data[0]
 
@@ -243,10 +239,16 @@ class MainScreen(Screen):
                     current_node.expand_all()
                 
             else:
-                #Store line into tree but removes status prefixes
-                if "[S]" in x:
+                #Populates items with children
+                if "[S]" in x and has_child(data,x):
                     current_node = tree.root.add_leaf("[SUCCESS]    " + x.replace("[S]|",""))
                     current_node.label.stylize("green")
+
+                #Populates items without children
+                elif "[S]" in x and not has_child(data,x):
+                    current_node = tree.root.add_leaf("  [SUCCESS]    " + x.replace("[S]|",""))
+                    current_node.label.stylize("green")
+
                 else:
                     current_node = tree.root.add(x,allow_expand=False)
         

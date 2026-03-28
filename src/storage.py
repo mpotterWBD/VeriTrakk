@@ -8,6 +8,25 @@ data_dir = working_dir / 'data'
 prcss_files = []
 file_names = []
 
+def save_root(new_root):
+    with open(data_dir / "root.txt", 'w') as f:
+        f.writelines(new_root)
+
+def read_root():
+    with open(data_dir / "root.txt", 'r') as f:
+        current_root = f.readlines()
+        return current_root
+
+def has_child(list,item):
+    index = list.index(item)
+    try:
+        if "[>]" in list[index + 1] and "[>]" not in list[index]:
+            return True
+        else:
+            return False
+    except IndexError:
+        return False
+ 
 def file_parser_selected(new_path):
     file_names = []
     files = list(new_path.glob("*.prcss"))    
@@ -25,8 +44,8 @@ def file_parser():
 
     return file_names
         
-def file_reader(file_name):
-        with open(data_dir / file_name, 'r') as f:
+def file_reader(path,file_name):
+        with open(path / file_name, 'r') as f:
             data = f.readlines()
         return data
 
@@ -37,8 +56,8 @@ def number_of_files(files):
     return count
 
 #Appends the [S] status prefix to the specified line in the .prcss file
-def set_S(label, file_name):
-    with open(data_dir / file_name, 'r') as f:
+def set_S(label, path, file_name):
+    with open(path / file_name, 'r') as f:
         data = f.readlines()
     
     # Find and modify the line matching the label
@@ -68,7 +87,7 @@ def set_S(label, file_name):
             modified_data.append(line)
     
     # Write back to file
-    with open(data_dir / file_name, 'w') as f:
+    with open(path / file_name, 'w') as f:
         f.writelines(modified_data)
 
 #Returns True if label contains [S] status prefix     
@@ -81,8 +100,8 @@ def has_S(label, file_name):
             return True
     return False
 
-def remove_S(label, file_name):
-    with open(data_dir / file_name, 'r') as f:
+def remove_S(label, path, file_name):
+    with open(path / file_name, 'r') as f:
         data = f.readlines()
     
     # Find and modify the line matching the label
@@ -112,5 +131,5 @@ def remove_S(label, file_name):
             modified_data.append(line)
     
     # Write back to file
-    with open(data_dir / file_name, 'w') as f:
+    with open(path / file_name, 'w') as f:
         f.writelines(modified_data)
