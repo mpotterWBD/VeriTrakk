@@ -1,13 +1,15 @@
 from textual.app import App, ComposeResult
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree
 from textual.binding import Binding
+from pathlib import Path
 from textual.screen import Screen
+from typing import Iterable
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child
 
-FILES = file_parser()
+FILES = []
 NOF = number_of_files(FILES)
 
 FIGLET = """
@@ -33,21 +35,23 @@ class MainScreen(Screen):
         yield Header(id="header")
         # self.query_one("header").tall = True
 
-        with Vertical():
+        with Vertical(id="main_panel"):
 
 #TABS START
 #--------------------------------------------------------------------------------------
             with Container (id="graphical_header"):
                 yield Static(content=FIGLET,id="figlet")
+
             with Container(id="tab_placeholder"):
                 yield Placeholder("SELECT TABS GO HERE")
 #TABS END
 #--------------------------------------------------------------------------------------
 
-            with Horizontal():
-                with Container(id="select_cont"):   
+            with Horizontal(id="data_panel"):
+                with Vertical(id="left_panel"):
+                    with Container(id="select_cont"):   
 
-                        options = [(x,x) for x in FILES]
+                        options = []
                         yield Select(
                             options,
                             id="process_select",
@@ -55,6 +59,11 @@ class MainScreen(Screen):
                             prompt="Select",
                             allow_blank=True
                         )
+
+                    with Container(id="file_cont"):
+                        yield DirOnlyTree(Path.home(),id="file_tree")
+
+                  
 
                 with ContentSwitcher(initial="process_builder",id="ms_content_switcher"):
                     with Container(id="process_builder"):
@@ -71,13 +80,35 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
 
         yield Footer()
-   
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        path = event.path
+        self.root = path
+        matches = list(path.glob("*.prcss"))
+        if matches:
+            save_root(str(path))
+            files = file_parser_selected(path)
+            nof = number_of_files(files)
+            options = [(x, x) for x in files]
+            select_cont = self.query_one("#select_cont")
+            select_cont.styles.height = 4 + nof
+            self.log("number of files = " + str(nof))
+            self.query_one("#process_select", Select).set_options(options)
+            self.query_one("#process_select", Select).focus()
+
+            
     def action_back(self) -> None:
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_builder"
         select = self.query_one("#process_select", Select).focus()
+        select_cont = self.query_one("#select_cont")
         select.clear()
 
         self.query_one("#process_tree").reset(self.tree_name)
+
+        if self.app.focused is self.query_one("#process_select"):
+            select_cont.styles.height = "auto"
+            self.query_one("#file_tree").focus()
+        elif self.app.focused is self.query_one("#file_tree"):
+            self.query_one("#file_tree").focus()
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -90,73 +121,86 @@ class MainScreen(Screen):
             tree.action_cursor_up()
     
     def action_select_right(self) -> None:
+        succ_c = "[SUCCESS]    "
+        succ_nc = "  [SUCCESS]    "
         tree = self.query_one("#process_tree")
-        if self.query_one("#ms_content_switcher").current == "process_cont":
-            node = tree.cursor_node
-            node_buff = node.label
-            # self.log("Label = ",node_buff)
-            # self.log("file = ",self.select_data)
-            self.log("node_buff=",node_buff)
+        node = tree.cursor_node
+        node_buff = node.label
 
-            # applies only to nodes that are not successful and nodes that dont have children
+        if self.query_one("#ms_content_switcher").current == "process_cont":
+
+            #Applies to nodes with out success and nodes with no children
             if "[SUCCESS]" not in node_buff and len(node.children) == 0:
-                set_S(str(node_buff), str(self.select_data))
-                node.label = "[SUCCESS]" + "    " + str(node_buff)
+                set_S(str(node_buff), self.root, str(self.select_data))
+                node.label = succ_nc + str(node_buff)
                 self.log(node.label)
                 node.label.stylize("green")
-                node.set_label(node.label)
+                # node.set_label(node.label)
 
-            # If the node is a parent, the node Collapses and appends [S] when children are all successful
+            #Auto collapeses parent when children are successful
             if node.parent:
                 all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.children)
                 if all_success:
                     node.parent.collapse()
-                    parent_label = str(node.parent.label).replace("[SUCCESS]", "").strip()
-                    node.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
-                    set_S(str(parent_label), str(self.select_data))
+                    parent_label = str(node.parent.label).replace(succ_c, "").strip()
+                    node.parent.set_label(Text(succ_c + parent_label, style="green"))
+                    set_S(str(parent_label), self.root, str(self.select_data))
                     tree.move_cursor(node.parent)
 
+            #Auto collapeses root when everything is successful
             if node.parent and node.parent.parent:
                 parents_all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.parent.children)
                 if parents_all_success:
                     node.parent.parent.collapse()
-                    parents_parent_label = str(node.parent.parent.label).replace("[SUCCESS]", "").strip()
-                    node.parent.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
-                    set_S(str(parents_parent_label), str(self.select_data))
+                    parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
+                    node.parent.parent.set_label(Text(succ_c + parent_label, style="green"))
+                    set_S(str(parents_parent_label), self.root,str(self.select_data))
         
             
     def action_select_left(self) -> None:
+        succ_c = "[SUCCESS]    "
+        succ_nc = "  [SUCCESS]    "
         tree = self.query_one("#process_tree")
+        node = tree.cursor_node
+        node_buff = node.label
+
         if self.query_one("#ms_content_switcher").current == "process_cont":
-            node = tree.cursor_node
-            node_buff = node.label
-            #Only applies to nodes with success and nodes with no children
-            if "[SUCCESS]" in node_buff and len(node.children) == 0:
-                new_label = str(node_buff).replace("[SUCCESS]    ","")
-                remove_S("[S]|" + str(new_label), str(self.select_data))
+            
+            #Applies to nodes with success and nodes with no children
+            if succ_c in node_buff and len(node.children) == 0:
+                self.log("WE ARE EFFECTING CHILD WITH NO CHILD")
+                self.log("node_buff = " + str(node_buff))
+                
+                #handles formatting based on if child has no children inside and has a parent or if just a child uner main root
+                if succ_c in str(node_buff):
+                    new_label = str(node_buff).replace(succ_c,"").strip()
+                elif succ_nc in str(node_buff):
+                    new_label = str(node_buff).replace(succ_nc,"").strip()
+                
+                self.log("to remove = " + "[S]|" + str(new_label))
+                remove_S("[S]|" + str(new_label).strip(), self.root, str(self.select_data))
                 node.label = new_label
                 node.label.stylize("default")
 
+            #Applies to nodes with success and nodes with children
             if node.parent:
-                parent_label = str(node.parent.label).replace("[SUCCESS]", "").strip()
-                remove_S("[S]|" + str(parent_label), str(self.select_data))
+                parent_label = str(node.parent.label).replace(succ_c, "").strip()
+                remove_S("[S]|" + str(parent_label), self.root, str(self.select_data))
                 node.parent.label = parent_label
                 node.parent.label.stylize("default")
 
+            #Applies to root node
             if node.parent and node.parent.parent:
-                parents_parent_label = str(node.parent.parent.label).replace("[SUCCESS]", "").strip()
-                remove_S("[S]|" + str(parents_parent_label), str(self.select_data))
+                parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
+                remove_S("[S]|" + str(parents_parent_label), self.root, str(self.select_data))
                 node.parent.parent.label = parents_parent_label
                 node.parent.parent.label.stylize("default")
                 
-                
-
-
     def on_mount(self) -> None:
         self.title = "WELCOME TO VERITRAK"
         self.sub_title = "Powered by Westbound Designs"
 
-        self.log("STUFF = ", file_reader("test_proc.prcss"))
+        # self.log("STUFF = ", file_reader("test_proc.prcss"))
 
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
@@ -166,6 +210,8 @@ class MainScreen(Screen):
 
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
+
+        self.query_one("#file_tree").focus()
         
     def on_screen_resume(self) -> None:
         select = self.query_one("#process_select", Select)
@@ -179,7 +225,7 @@ class MainScreen(Screen):
         if self.select_data is Select.NULL:         
             return
         
-        data = file_reader(self.select_data)
+        data = file_reader(self.root, self.select_data)
         #Sets the first line in .prcss file as the main node
         tree.root.label = data[0]
 
@@ -211,10 +257,16 @@ class MainScreen(Screen):
                     current_node.expand_all()
                 
             else:
-                #Store line into tree but removes status prefixes
-                if "[S]" in x:
+                #Populates items with children
+                if "[S]" in x and has_child(data,x):
                     current_node = tree.root.add_leaf("[SUCCESS]    " + x.replace("[S]|",""))
                     current_node.label.stylize("green")
+
+                #Populates items without children
+                elif "[S]" in x and not has_child(data,x):
+                    current_node = tree.root.add_leaf("  [SUCCESS]    " + x.replace("[S]|",""))
+                    current_node.label.stylize("green")
+
                 else:
                     current_node = tree.root.add(x,allow_expand=False)
         
@@ -226,6 +278,11 @@ class MainScreen(Screen):
             self.query_one("#ms_content_switcher").current = "process_cont"
         
         self.query_one("#process_tree").focus()
+        
+
+class DirOnlyTree(DirectoryTree):
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if p.is_dir()] 
     
 class veritrakk(App):
 

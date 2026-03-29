@@ -2,6 +2,16 @@
 #ms_content_switcher {
     width: 100%;
 }
+#file_cont {
+    border: double darkseagreen;
+    width: 100%;
+    height: 1fr;
+}
+
+#file_cont:focus-within {
+    border: double goldenrod
+}
+
 #graphical_header{
      height: auto;
      padding: 0;
@@ -12,6 +22,11 @@ Label {
     border: darkkhaki;
     width: 50%;
     height: 2;
+}
+
+#left_panel{
+    width: 30%;
+    height: 100%;
 }
 
 Header {
@@ -29,6 +44,10 @@ Header {
     border: none;
 }
 
+#main_panel{
+    height: 100%
+}
+
 #process_select{
     color: darkkhaki;
 }
@@ -38,7 +57,7 @@ Header {
 
 #process_builder{
     border: double darkseagreen;
-    width: 85%;
+    width: 70%;
 }
 
 #process_cont{
@@ -62,7 +81,8 @@ Header {
 
 #select_cont {
     border: double darkseagreen;
-    width: 15%;
+    width: 100%;
+    height: auto;
 }
 
 #tab_placeholder{

@@ -1,9 +1,15 @@
-[S]|Get Focused
-[S]|Try and find peace
-[S]|[>]|look outside
-[S]|[>]|go fishing
-[S]|[>]|love kimberly
-[S]|[>]|cuddle rumples
-[S]|Wash the toes
-[S]|[>]|washem
-[S]|Walk in circles
+MAIN TASK
+TASK1
+TASK2
+TASK3
+TASK4
+[>]|SUBTASK1
+[>]|SUBTASK2
+[>]|SUBTASK3
+[>]|SUBTASK4
+TASK5
+SUBTASK5
+[S]|SUBTASK6
+SUBTASK7
+SUBTASK8
+BONUSTASK

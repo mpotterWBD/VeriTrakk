@@ -1,5 +1,6 @@
-from storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S
+from storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, save_root, read_root, has_child
 print("TESTING...")
+
 
 # data = file_reader("test_proc.prcss")
 # for x in data:
@@ -9,7 +10,8 @@ file = "test_proc.prcss"
 label = "[S]|TASK #1"
 
 
-print("Contains [S]?", has_S(label,file))
-# set_S(label,file)
-print("Removing [S]")
-remove_S(label,file)
+data = file_reader("test_proc.prcss")
+
+for x in data:
+    print (x + "Has child? = " + str(has_child(data,x)) + "\n")
+
