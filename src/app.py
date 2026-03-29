@@ -107,6 +107,8 @@ class MainScreen(Screen):
         if self.app.focused is self.query_one("#process_select"):
             select_cont.styles.height = "auto"
             self.query_one("#file_tree").focus()
+        elif self.app.focused is self.query_one("#file_tree"):
+            self.query_one("#file_tree").focus()
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -119,61 +121,77 @@ class MainScreen(Screen):
             tree.action_cursor_up()
     
     def action_select_right(self) -> None:
+        succ_c = "[SUCCESS]    "
+        succ_nc = "  [SUCCESS]    "
         tree = self.query_one("#process_tree")
-        if self.query_one("#ms_content_switcher").current == "process_cont":
-            node = tree.cursor_node
-            node_buff = node.label
-            # self.log("Label = ",node_buff)
-            # self.log("file = ",self.select_data)
-            self.log("node_buff=",node_buff)
+        node = tree.cursor_node
+        node_buff = node.label
 
-            # applies only to nodes that are not successful and nodes that dont have children
+        if self.query_one("#ms_content_switcher").current == "process_cont":
+
+            #Applies to nodes with out success and nodes with no children
             if "[SUCCESS]" not in node_buff and len(node.children) == 0:
                 set_S(str(node_buff), self.root, str(self.select_data))
-                node.label = "  [SUCCESS]  " + "  " + str(node_buff)
+                node.label = succ_nc + str(node_buff)
                 self.log(node.label)
                 node.label.stylize("green")
-                node.set_label(node.label)
+                # node.set_label(node.label)
 
-            # If the node is a parent, the node Collapses and appends [S] when children are all successful
+            #Auto collapeses parent when children are successful
             if node.parent:
                 all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.children)
                 if all_success:
                     node.parent.collapse()
-                    parent_label = str(node.parent.label).replace("[SUCCESS]", "").strip()
-                    node.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
+                    parent_label = str(node.parent.label).replace(succ_c, "").strip()
+                    node.parent.set_label(Text(succ_c + parent_label, style="green"))
                     set_S(str(parent_label), self.root, str(self.select_data))
                     tree.move_cursor(node.parent)
 
+            #Auto collapeses root when everything is successful
             if node.parent and node.parent.parent:
                 parents_all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.parent.children)
                 if parents_all_success:
                     node.parent.parent.collapse()
-                    parents_parent_label = str(node.parent.parent.label).replace("[SUCCESS]", "").strip()
-                    node.parent.parent.set_label(Text("[SUCCESS]    " + parent_label, style="green"))
+                    parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
+                    node.parent.parent.set_label(Text(succ_c + parent_label, style="green"))
                     set_S(str(parents_parent_label), self.root,str(self.select_data))
         
             
     def action_select_left(self) -> None:
+        succ_c = "[SUCCESS]    "
+        succ_nc = "  [SUCCESS]    "
         tree = self.query_one("#process_tree")
+        node = tree.cursor_node
+        node_buff = node.label
+
         if self.query_one("#ms_content_switcher").current == "process_cont":
-            node = tree.cursor_node
-            node_buff = node.label
-            #Only applies to nodes with success and nodes with no children
-            if "  [SUCCESS]" in node_buff and len(node.children) == 0:
-                new_label = str(node_buff).replace("  [SUCCESS]    ","")
-                remove_S("[S]|" + str(new_label), self.root, str(self.select_data))
+            
+            #Applies to nodes with success and nodes with no children
+            if succ_c in node_buff and len(node.children) == 0:
+                self.log("WE ARE EFFECTING CHILD WITH NO CHILD")
+                self.log("node_buff = " + str(node_buff))
+                
+                #handles formatting based on if child has no children inside and has a parent or if just a child uner main root
+                if succ_c in str(node_buff):
+                    new_label = str(node_buff).replace(succ_c,"").strip()
+                elif succ_nc in str(node_buff):
+                    new_label = str(node_buff).replace(succ_nc,"").strip()
+                
+                self.log("to remove = " + "[S]|" + str(new_label))
+                remove_S("[S]|" + str(new_label).strip(), self.root, str(self.select_data))
                 node.label = new_label
                 node.label.stylize("default")
 
+            #Applies to nodes with success and nodes with children
             if node.parent:
-                parent_label = str(node.parent.label).replace("[SUCCESS]    ", "").strip()
+                parent_label = str(node.parent.label).replace(succ_c, "").strip()
                 remove_S("[S]|" + str(parent_label), self.root, str(self.select_data))
                 node.parent.label = parent_label
                 node.parent.label.stylize("default")
 
+            #Applies to root node
             if node.parent and node.parent.parent:
-                parents_parent_label = str(node.parent.parent.label).replace("[SUCCESS]", "").strip()
+                parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
                 remove_S("[S]|" + str(parents_parent_label), self.root, str(self.select_data))
                 node.parent.parent.label = parents_parent_label
                 node.parent.parent.label.stylize("default")
