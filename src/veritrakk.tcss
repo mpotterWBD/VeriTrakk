@@ -48,6 +48,15 @@ Header {
     height: 100%
 }
 
+#or_cont{
+    
+    height: 4;
+}
+
+#or_tab{
+    width: 100%;
+}
+
 #process_select{
     color: darkkhaki;
 }

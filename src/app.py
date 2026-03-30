@@ -1,6 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs
 from textual.binding import Binding
 from pathlib import Path
 from textual.screen import Screen
@@ -42,8 +42,8 @@ class MainScreen(Screen):
             with Container (id="graphical_header"):
                 yield Static(content=FIGLET,id="figlet")
 
-            with Container(id="tab_placeholder"):
-                yield Placeholder("SELECT TABS GO HERE")
+            # with Container(id="tab_placeholder"):
+            #     yield Placeholder("SELECT TABS GO HERE")
 #TABS END
 #--------------------------------------------------------------------------------------
 
@@ -60,8 +60,17 @@ class MainScreen(Screen):
                             allow_blank=True
                         )
 
-                    with Container(id="file_cont"):
-                        yield DirOnlyTree(Path.home(),id="file_tree")
+                    with ContentSwitcher(initial="or_cont",id="or_content_switcher"):
+                        with Container(id="or_cont"):
+
+                            or_tab = Tabs("OPEN","RESUME","PROCESS BUILDER",id="or_tab")
+                            
+                            yield or_tab
+                    
+                    
+
+                        with Container(id="file_cont"):
+                            yield DirOnlyTree(Path.home(),id="file_tree")
 
                   
 
@@ -211,7 +220,7 @@ class MainScreen(Screen):
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
 
-        self.query_one("#file_tree").focus()
+        self.query_one("#or_tab").focus()
         
     def on_screen_resume(self) -> None:
         select = self.query_one("#process_select", Select)
