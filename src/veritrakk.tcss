@@ -5,7 +5,7 @@
 #file_cont {
     border: double darkseagreen;
     width: 100%;
-    height: 1fr;
+    height: 93%;
 }
 
 #file_cont:focus-within {
@@ -91,7 +91,7 @@ Header {
 #select_cont {
     border: double darkseagreen;
     width: 100%;
-    height: auto;
+    height: 7%;
 }
 
 #tab_placeholder{

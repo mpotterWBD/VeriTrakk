@@ -1,6 +1,7 @@
 from textual.app import App, ComposeResult
 from textual.reactive import reactive
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs
+from textual.events import Key
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs, Tab
 from textual.binding import Binding
 from pathlib import Path
 from textual.screen import Screen
@@ -49,28 +50,33 @@ class MainScreen(Screen):
 
             with Horizontal(id="data_panel"):
                 with Vertical(id="left_panel"):
-                    with Container(id="select_cont"):   
-
-                        options = []
-                        yield Select(
-                            options,
-                            id="process_select",
-                            compact=True,
-                            prompt="Select",
-                            allow_blank=True
-                        )
-
                     with ContentSwitcher(initial="or_cont",id="or_content_switcher"):
                         with Container(id="or_cont"):
-
-                            or_tab = Tabs("OPEN","RESUME","PROCESS BUILDER",id="or_tab")
+                            
+                            or_tab = Tabs(
+                                Tab("OPEN", id="open"),
+                                Tab("RESUME", id="resume"),
+                                Tab("PROCESS BUILDER", id="processbuilder"),
+                                id="or_tab"
+)
+                            # or_tab = Tabs("OPEN","RESUME","PROCESS BUILDER",id="or_tab")
                             
                             yield or_tab
                     
                     
+                        with Container(id="file_and_select"):
+                            with Container(id="select_cont"):   
 
-                        with Container(id="file_cont"):
-                            yield DirOnlyTree(Path.home(),id="file_tree")
+                                options = []
+                                yield Select(
+                                options,
+                                id="process_select",
+                                compact=True,
+                                prompt="Select",
+                                allow_blank=True
+                            )
+                            with Container(id="file_cont"):
+                                yield DirOnlyTree(Path.home(),id="file_tree")
 
                   
 
@@ -89,6 +95,22 @@ class MainScreen(Screen):
 #--------------------------------------------------------------------------------------
 
         yield Footer()
+
+    # def on_show(self) -> None:
+    #     self.query_one("#file_tree").root.expand()
+
+    def on_key(self, event: Key) -> None:
+        tab = self.query_one("#or_tab")
+        if event.key == "enter":
+            # self.log("tab = ", tab.active)
+            if "open" in tab.active:
+                tab.active = ""
+                tree = self.query_one("#file_tree")
+                self.query_one("#or_content_switcher").current = "file_and_select"
+                tree.focus()
+                tree.root.expand()
+                tree.move_cursor(tree.root)
+   
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         path = event.path
         self.root = path
@@ -107,17 +129,27 @@ class MainScreen(Screen):
             
     def action_back(self) -> None:
         self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_builder"
-        select = self.query_one("#process_select", Select).focus()
+        self.query_one("#or_content_switcher").current = "or_cont"
+        self.query_one("#or_tab").focus()
+        self.query_one("#or_tab").active = "open"
+        self.query_one("#file_tree").root.collapse_all()
+
+        select = self.query_one("#process_select", Select)
         select_cont = self.query_one("#select_cont")
+        select.set_options([])
         select.clear()
-
         self.query_one("#process_tree").reset(self.tree_name)
+        select_cont.styles.height = "7%"
 
-        if self.app.focused is self.query_one("#process_select"):
-            select_cont.styles.height = "auto"
-            self.query_one("#file_tree").focus()
-        elif self.app.focused is self.query_one("#file_tree"):
-            self.query_one("#file_tree").focus()
+        # if self.app.focused is self.query_one("#process_select"):
+        #     self.query_one("#or_content_switcher").current = "or_cont"
+        #     self.query_one("#or_tab").focus()
+        #     self.query_one("#or_tab").active = "open"
+        #     self.query_one("#file_tree").root.collapse_all()
+            # select_cont.styles.height = "auto"
+            # self.query_one("#file_tree").focus()
+        # elif self.app.focused is self.query_one("#file_tree"):
+        #     self.query_one("#file_tree").focus()
 
     def action_select_down(self) -> None:
         tree = self.query_one("#process_tree")
@@ -220,6 +252,8 @@ class MainScreen(Screen):
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
 
+        # self.call_after_refresh(self.query_one("#file_tree").root.expand)
+
         self.query_one("#or_tab").focus()
         
     def on_screen_resume(self) -> None:
@@ -290,6 +324,9 @@ class MainScreen(Screen):
         
 
 class DirOnlyTree(DirectoryTree):
+    def on_show(self) -> None:
+        self.root.expand()
+
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [p for p in paths if p.is_dir()] 
     
