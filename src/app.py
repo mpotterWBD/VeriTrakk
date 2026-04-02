@@ -1,7 +1,7 @@
 from textual.app import App, ComposeResult
 from textual.reactive import reactive
 from textual.events import Key
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs, Tab
+from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs, Tab, TabbedContent
 from textual.binding import Binding
 from pathlib import Path
 from textual.screen import Screen
@@ -100,8 +100,13 @@ class MainScreen(Screen):
     # def on_show(self) -> None:
     #     self.query_one("#file_tree").root.expand()
 
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+         if event.tab.id == "#resume":
+            event.tab.label = "frump"
+
     def on_key(self, event: Key) -> None:
         tab = self.query_one("#or_tab")
+
         if event.key == "enter":
             # self.log("tab = ", tab.active)
             if "open" in tab.active:
@@ -183,7 +188,12 @@ class MainScreen(Screen):
             #Applies to nodes with out success and nodes with no children
             if "[SUCCESS]" not in node_buff and len(node.children) == 0:
                 set_S(str(node_buff), path, file)
-                node.label = succ_nc + str(node_buff)
+                #Checks if node is a [>]
+                if node.parent.parent:
+                    node.label = succ_c + str(node_buff)
+                else:
+                    node.label = succ_nc + str(node_buff)
+                    
                 self.log(node.label)
                 node.label.stylize("green")
                 # node.set_label(node.label)
@@ -195,7 +205,7 @@ class MainScreen(Screen):
                     node.parent.collapse()
                     parent_label = str(node.parent.label).replace(succ_c, "").strip()
                     node.parent.set_label(Text(succ_c + parent_label, style="green"))
-                    set_S(str(node_buff), path, file)
+                    set_S(str(parent_label), path, file)
                     tree.move_cursor(node.parent)
 
             #Auto collapeses root when everything is successful
@@ -204,8 +214,8 @@ class MainScreen(Screen):
                 if parents_all_success:
                     node.parent.parent.collapse()
                     parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
-                    node.parent.parent.set_label(Text(succ_c + parent_label, style="green"))
-                    set_S(str(node_buff), path, file)
+                    node.parent.parent.set_label(Text(succ_c + parents_parent_label, style="green"))
+                    set_S(str(parents_parent_label), path, file)
         
     def action_select_left(self) -> None:
         succ_c = "[SUCCESS]    "
@@ -258,8 +268,6 @@ class MainScreen(Screen):
     def on_mount(self) -> None:
         self.title = "WELCOME TO VERITRAK"
         self.sub_title = "Powered by Westbound Designs"
-
-        # self.log("STUFF = ", file_reader("test_proc.prcss"))
 
         select_cont = self.query_one("#select_cont", Container)
         select_cont.border_title = "SELECT PROCESSES"
