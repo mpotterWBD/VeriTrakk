@@ -8,14 +8,15 @@ data_dir = working_dir / 'data'
 prcss_files = []
 file_names = []
 
-def save_root(new_root):
+def save_root(new_root, file_name):
     with open(data_dir / "root.txt", 'w') as f:
         f.writelines(new_root)
+        f.writelines("\n" + file_name)
 
-def read_root():
+def read_root_and_file():
     with open(data_dir / "root.txt", 'r') as f:
-        current_root = f.readlines()
-        return current_root
+        c_and_f = f.readlines()
+    return c_and_f
 
 def has_child(list,item):
     index = list.index(item)

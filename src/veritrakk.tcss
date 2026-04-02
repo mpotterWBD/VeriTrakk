@@ -71,7 +71,7 @@ Header {
 
 #process_cont{
     border: double darkseagreen;
-    width: 85%;
+    width: 70%;
     padding: 0;
 }
 
@@ -97,6 +97,10 @@ Header {
 #tab_placeholder{
     width: 100%;
     height: 1;
+}
+
+Tabs > #tabs-list {
+    border-bottom: none;
 }
 
 #header_rule{
