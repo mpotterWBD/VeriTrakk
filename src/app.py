@@ -97,12 +97,22 @@ class MainScreen(Screen):
 
         yield Footer()
 
-    # def on_show(self) -> None:
-    #     self.query_one("#file_tree").root.expand()
+    # # def on_show(self) -> None:
+    # #     self.query_one("#file_tree").root.expand()
 
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-         if event.tab.id == "#resume":
-            event.tab.label = "frump"
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        tab = self.query_one("#or_tab")
+        resume_tab = self.query_one("#resume")
+        try:
+            if "resume" in tab.active:
+                resume_tab.label = "RESUME" + " \\[" + str(read_root_and_file()[1]).replace(".prcss","") + "]"
+            else:
+                resume_tab.label = "RESUME"
+        except IndexError:
+            resume_tab.label = "RESUME \\[NONE]"
+
+        
+
 
     def on_key(self, event: Key) -> None:
         tab = self.query_one("#or_tab")
@@ -143,7 +153,7 @@ class MainScreen(Screen):
 
             
     def action_back(self) -> None:
-        self.query_one("#ms_content_switcher", ContentSwitcher).current = "process_builder"
+        self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
         self.query_one("#or_content_switcher").current = "or_cont"
         self.query_one("#or_tab").focus()
         self.query_one("#or_tab").active = "open"
