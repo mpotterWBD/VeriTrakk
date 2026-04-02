@@ -1,4 +1,4 @@
-from storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, save_root, read_root, has_child
+from storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, save_root, read_root_and_file, has_child
 print("TESTING...")
 
 
@@ -10,8 +10,4 @@ file = "test_proc.prcss"
 label = "[S]|TASK #1"
 
 
-data = file_reader("test_proc.prcss")
-
-for x in data:
-    print (x + "Has child? = " + str(has_child(data,x)) + "\n")
-
+print(read_root_and_file())

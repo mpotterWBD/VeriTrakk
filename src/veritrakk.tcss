@@ -5,7 +5,7 @@
 #file_cont {
     border: double darkseagreen;
     width: 100%;
-    height: 1fr;
+    height: 93%;
 }
 
 #file_cont:focus-within {
@@ -48,6 +48,15 @@ Header {
     height: 100%
 }
 
+#or_cont{
+    
+    height: 4;
+}
+
+#or_tab{
+    width: 100%;
+}
+
 #process_select{
     color: darkkhaki;
 }
@@ -82,12 +91,16 @@ Header {
 #select_cont {
     border: double darkseagreen;
     width: 100%;
-    height: auto;
+    height: 7%;
 }
 
 #tab_placeholder{
     width: 100%;
     height: 1;
+}
+
+Tabs > #tabs-list {
+    border-bottom: none;
 }
 
 #header_rule{
