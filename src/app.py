@@ -178,8 +178,8 @@ class MainScreen(Screen):
             tree.action_cursor_up()
     
     def action_select_right(self) -> None:
-        succ_c = "[SUCCESS]    "
-        succ_nc = "  [SUCCESS]    "
+        succ_c = "[COMPLETE]    "
+        succ_nc = "  [COMPLETE]    "
         tree = self.query_one("#process_tree")
         node = tree.cursor_node
         node_buff = node.label
@@ -195,8 +195,8 @@ class MainScreen(Screen):
 
         if self.query_one("#ms_content_switcher").current == "process_cont":
 
-            #Applies to nodes with out success and nodes with no children
-            if "[SUCCESS]" not in node_buff and len(node.children) == 0:
+            #Applies to nodes with out COMPLETE and nodes with no children
+            if "[COMPLETE]" not in node_buff and len(node.children) == 0:
                 set_S(str(node_buff), path, file)
                 #Checks if node is a [>]
                 if node.parent.parent:
@@ -208,28 +208,28 @@ class MainScreen(Screen):
                 node.label.stylize("green")
                 # node.set_label(node.label)
 
-            #Auto collapeses parent when children are successful
+            #Auto collapeses parent when children are COMPLETEful
             if node.parent:
-                all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.children)
-                if all_success:
+                all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.children)
+                if all_complete:
                     node.parent.collapse()
                     parent_label = str(node.parent.label).replace(succ_c, "").strip()
                     node.parent.set_label(Text(succ_c + parent_label, style="green"))
                     set_S(str(parent_label), path, file)
                     tree.move_cursor(node.parent)
 
-            #Auto collapeses root when everything is successful
+            #Auto collapeses root when everything is complete
             if node.parent and node.parent.parent:
-                parents_all_success = all("[SUCCESS]" in str(child.label) for child in node.parent.parent.children)
-                if parents_all_success:
+                parents_all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.parent.children)
+                if parents_all_complete:
                     node.parent.parent.collapse()
                     parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
                     node.parent.parent.set_label(Text(succ_c + parents_parent_label, style="green"))
                     set_S(str(parents_parent_label), path, file)
         
     def action_select_left(self) -> None:
-        succ_c = "[SUCCESS]    "
-        succ_nc = "  [SUCCESS]    "
+        succ_c = "[COMPLETE]    "
+        succ_nc = "  [COMPLETE ]    "
         tree = self.query_one("#process_tree")
         node = tree.cursor_node
         node_buff = node.label
@@ -245,7 +245,7 @@ class MainScreen(Screen):
 
         if self.query_one("#ms_content_switcher").current == "process_cont":
             
-            #Applies to nodes with success and nodes with no children
+            #Applies to nodes with COMPLETE and nodes with no children
             if succ_c in node_buff and len(node.children) == 0:
                 self.log("WE ARE EFFECTING CHILD WITH NO CHILD")
                 self.log("node_buff = " + str(node_buff))
@@ -261,7 +261,7 @@ class MainScreen(Screen):
                 node.label = new_label
                 node.label.stylize("default")
 
-            #Applies to nodes with success and nodes with children
+            #Applies to nodes with COMPLETE and nodes with children
             if node.parent:
                 parent_label = str(node.parent.label).replace(succ_c, "").strip()
                 remove_S("[S]|" + str(parent_label), path, file)
@@ -321,7 +321,7 @@ class MainScreen(Screen):
         self.log("DATA = ", data)
 
         if "[S]" in tree.root.label:
-            new_root_label = "[SUCCESS]    " + str(tree.root.label).replace("[S]|","")
+            new_root_label = "[COMPLETE]    " + str(tree.root.label).replace("[S]|","")
             tree.root.label = new_root_label
             tree.root.label.stylize("green")
             tree.root.collapse()
@@ -335,14 +335,14 @@ class MainScreen(Screen):
         for x in (data): 
             if "[>]" in x:
                 if "[S]" in x:
-                    #Populates data that is successful and is a child
+                    #Populates data that is COMPLETEful and is a child
                     current_node.allow_expand = True
-                    node_buffer = Text("[SUCCESS]    " + x.replace("[>]|","").replace("[S]|",""))
+                    node_buffer = Text("[COMPLETE]    " + x.replace("[>]|","").replace("[S]|",""))
                     node_buffer.stylize("green")
                     current_node.add_leaf(node_buffer)
                     # current_node.label.stylize("green")
                 else:
-                    #Populates data that is not successful and is a child
+                    #Populates data that is not complete and is a child
                     current_node.allow_expand = True
                     current_node.add_leaf(x.replace("[>]|",""))
                     current_node.expand_all()
@@ -350,12 +350,12 @@ class MainScreen(Screen):
             else:
                 #Populates items with children
                 if "[S]" in x and has_child(data,x):
-                    current_node = tree.root.add_leaf("[SUCCESS]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("[COMPLETE]    " + x.replace("[S]|",""))
                     current_node.label.stylize("green")
 
                 #Populates items without children
                 elif "[S]" in x and not has_child(data,x):
-                    current_node = tree.root.add_leaf("  [SUCCESS]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("  [COMPLETE]    " + x.replace("[S]|",""))
                     current_node.label.stylize("green")
 
                 else:
