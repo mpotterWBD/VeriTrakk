@@ -18,6 +18,24 @@ This application is a structured process-control checklist tool that enforces an
 
 2. python -m src
 
+### Run as a Desktop Executable
+
+After packaging, you can run VeriTrakk as a standalone Windows executable:
+
+1. Navigate to the `dist` folder inside the VeriTrakk directory:
+   
+   ```
+   cd "C:/Users/17195/Desktop/Westbound Designs/VeriTrakk/dist"
+   ```
+
+2. Double-click `VeriTrakkApp.exe` or run it from the command line:
+   
+   ```
+   VeriTrakkApp.exe
+   ```
+
+No Python installation is required for end users—everything is bundled in the executable.
+
 ## Textual Development Resources
 
 https://textual.textualize.io/

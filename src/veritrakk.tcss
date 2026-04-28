@@ -69,15 +69,105 @@ Header {
     width: 70%;
 }
 
+#builder_content_switcher {
+    height: 100%;
+}
+
+#builder_mode_select {
+    height: 4;
+}
+
+#builder_mode_tab {
+    width: 100%;
+}
+
+#builder_save_dir_select {
+    height: 100%;
+}
+
+#builder_save_dir_cont {
+    border: double darkseagreen;
+    width: 100%;
+    height: 100%;
+}
+
+#builder_save_dir_prompt {
+    border: double darkseagreen;
+    width: 100%;
+    height: 100%;
+    content-align: center middle;
+    text-align: center;
+    color: darkkhaki;
+}
+
+#process_builder_layout {
+    height: 100%;
+}
+
+#builder_editor {
+    height: 100%;
+}
+
+#builder_name_input {
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+#builder_tags_cont {
+    width: 100%;
+    height: 10;
+    border: double darkseagreen;
+    margin: 0 0 1 0;
+    padding: 1 1;
+    content-align: left top;
+    display: none;
+}
+
+#builder_process_tags {
+    height: 3;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+}
+
+#builder_process_tags Tab {
+    background: transparent;
+    color: #555555;
+}
+
+#builder_process_tags Tab.-active {
+    background: transparent;
+    color: darkseagreen;
+}
+
+#builder_process_tags Tab.tag-staged {
+    color: darkkhaki;
+    text-style: bold;
+}
+
+#builder_process_tags Tab#tag_placeholder {
+    color: #333333;
+    text-style: italic;
+}
+
+#builder_tree {
+    height: 1fr;
+}
+
 #process_cont{
     border: double darkseagreen;
     width: 70%;
     padding: 0;
 }
 
-#process_tree .tree--cursor{
-    background: blue 0%;
-    color: cornflowerblue;
+Tree .tree--cursor {
+    background: transparent;
+    color: #0059ff;
+}
+
+#builder_tree.blank-focused .tree--cursor {
+    background: #004faa;
+    color: black;
 }
 
 #process_tree .tree--label{
@@ -85,7 +175,7 @@ Header {
 }
 
 #process_tree .tree--guides{
-    color: darkseagreen
+    color: #0059ff;
 }
 
 #select_cont {
@@ -97,10 +187,6 @@ Header {
 #tab_placeholder{
     width: 100%;
     height: 1;
-}
-
-Tabs > #tabs-list {
-    border-bottom: none;
 }
 
 #header_rule{
