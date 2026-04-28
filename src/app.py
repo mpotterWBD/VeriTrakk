@@ -30,11 +30,12 @@ class MainScreen(Screen):
         Binding("down", "select_down"),
         Binding("right", "select_right"),
         Binding("left", "select_left"),
-        Binding("b", "back", "Home"),
-        Binding("escape", "unfocus_input", "Unfocus"),
+        Binding("b", "back", "Back"),
+        Binding("ctrl+b", "unfocus_input", "Back"),
         Binding("f", "select_builder_directory", "Select Dir"),
         Binding("ctrl+a", "arm_builder_shift", "Shift", priority=True),
         Binding("s", "save_builder_process", "Save"),
+        Binding("ctrl+s", "save_builder_process", "Save", priority=True),
         Binding("ctrl+t", "toggle_tags", "Tags"),
         Binding("ctrl+d", "delete_builder_node", "Delete", priority=True),
     
@@ -667,12 +668,26 @@ class MainScreen(Screen):
         if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
             return
 
-        input_widget = self.query_one("#builder_name_input", Input)
-        if input_widget.has_focus:
-            self.set_focus(None)
+        self._show_process_builder_mode_select()
 
             
     def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "unfocus_input":
+            try:
+                return (
+                    self.query_one("#ms_content_switcher").current == "process_builder"
+                    and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor"
+                )
+            except Exception:
+                return False
+        if action == "save_builder_process":
+            try:
+                return (
+                    self.query_one("#ms_content_switcher").current == "process_builder"
+                    and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor"
+                )
+            except Exception:
+                return False
         if action == "toggle_tags":
             try:
                 return (
