@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -209,7 +209,7 @@ class MainScreen(Screen):
 
             root_raw = str(data[0]).strip()
             root_is_complete = "[S]|" in root_raw
-            root_label = root_raw.replace("[S]|", "").replace("[>]|", "").strip()
+            root_label = strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip())
             root_display = f"[COMPLETE]    {root_label}" if root_is_complete else root_label
             builder_tree.reset(root_display)
             builder_tree.root.expand()
@@ -222,7 +222,7 @@ class MainScreen(Screen):
 
                 is_complete = "[S]|" in raw_line
                 is_child = "[>]|" in raw_line
-                label = raw_line.replace("[S]|", "").replace("[>]|", "").strip()
+                label = strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip())
                 if not label:
                     continue
 
@@ -919,6 +919,21 @@ class MainScreen(Screen):
                 parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
                 node.parent.parent.set_label(Text(succ_c + parents_parent_label, style="green"))
                 set_S(str(parents_parent_label), path, file)
+
+        #Rename file when all top-level processes are complete
+        all_root_complete = (
+            len(tree.root.children) > 0
+            and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
+        )
+        if all_root_complete and "#COMPLETE" not in file:
+            new_file = file.replace(".prcss", "#COMPLETE.prcss")
+            try:
+                (path / file).rename(path / new_file)
+                save_root(str(path), new_file)
+                self.select_data = new_file
+                self.notify(f"Process complete! File renamed to {new_file}")
+            except OSError as e:
+                self.notify(f"Could not rename file: {e}", severity="error")
         
     def action_select_left(self) -> None:
         if self.builder_tags_open:
@@ -970,6 +985,19 @@ class MainScreen(Screen):
             remove_S("[S]|" + str(parents_parent_label), path, file)
             node.parent.parent.label = parents_parent_label
             node.parent.parent.label.stylize("default")
+
+        #Rename back if file was marked #COMPLETE but is no longer fully complete
+        if "#COMPLETE" in file:
+            not_all_complete = any("[COMPLETE]" not in str(child.label) for child in tree.root.children)
+            if not_all_complete:
+                old_file = file.replace("#COMPLETE.prcss", ".prcss")
+                try:
+                    (path / file).rename(path / old_file)
+                    save_root(str(path), old_file)
+                    self.select_data = old_file
+                    self.notify(f"Process incomplete — file renamed back to {old_file}")
+                except OSError as e:
+                    self.notify(f"Could not rename file: {e}", severity="error")
                 
     def on_mount(self) -> None:
         self.tab_selected = ""
@@ -1031,7 +1059,7 @@ class MainScreen(Screen):
         self.log("DATA = ", data)
 
         if "[S]" in tree.root.label:
-            new_root_label = "[COMPLETE]    " + str(tree.root.label).replace("[S]|","")
+            new_root_label = "[COMPLETE]    " + strip_date_tag(str(tree.root.label).replace("[S]|","").rstrip())
             tree.root.label = new_root_label
             tree.root.label.stylize("green")
             tree.root.collapse()
@@ -1047,30 +1075,50 @@ class MainScreen(Screen):
                 if "[S]" in x:
                     #Populates data that is COMPLETEful and is a child
                     current_node.allow_expand = True
-                    node_buffer = Text("[COMPLETE]    " + x.replace("[>]|","").replace("[S]|",""))
+                    node_buffer = Text("[COMPLETE]    " + strip_date_tag(x.replace("[>]|","").replace("[S]|","").rstrip()))
                     node_buffer.stylize("green")
                     current_node.add_leaf(node_buffer)
                     # current_node.label.stylize("green")
                 else:
                     #Populates data that is not complete and is a child
                     current_node.allow_expand = True
-                    current_node.add_leaf(x.replace("[>]|",""))
+                    current_node.add_leaf(strip_date_tag(x.replace("[>]|","").rstrip()))
                     current_node.expand_all()
                 
             else:
                 #Populates items with children
                 if "[S]" in x and has_child(data,x):
-                    current_node = tree.root.add_leaf("[COMPLETE]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("[COMPLETE]    " + strip_date_tag(x.replace("[S]|","").rstrip()))
                     current_node.label.stylize("green")
 
                 #Populates items without children
                 elif "[S]" in x and not has_child(data,x):
-                    current_node = tree.root.add_leaf("  [COMPLETE]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("  [COMPLETE]    " + strip_date_tag(x.replace("[S]|","").rstrip()))
                     current_node.label.stylize("green")
 
                 else:
-                    current_node = tree.root.add(x,allow_expand=False)
+                    current_node = tree.root.add(strip_date_tag(x.rstrip()),allow_expand=False)
         
+        # Recompute completion display from actual children state to fix any
+        # inconsistent file state (e.g. root marked [S] but children aren't all complete)
+        succ_c_load = "[COMPLETE]    "
+        for top_node in tree.root.children:
+            if top_node.children:
+                all_sub_complete = all("[COMPLETE]" in str(child.label) for child in top_node.children)
+                if not all_sub_complete and "[COMPLETE]" in str(top_node.label):
+                    clean = str(top_node.label).replace(succ_c_load, "").strip()
+                    top_node.set_label(clean)
+                    top_node.expand()
+
+        all_top_complete = (
+            len(tree.root.children) > 0
+            and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
+        )
+        if not all_top_complete and "[COMPLETE]" in str(tree.root.label):
+            root_clean = str(tree.root.label).replace(succ_c_load, "").strip()
+            tree.root.label = root_clean
+            tree.root.expand()
+
         if "resume" in self.tab_selected:
             self.query_one("#ms_content_switcher").current = "process_cont"
         
