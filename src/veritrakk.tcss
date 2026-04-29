@@ -165,6 +165,37 @@ Header {
     padding: 0;
 }
 
+#process_tree {
+    height: 1fr;
+}
+
+#note_input {
+    width: 100%;
+    height: 3;
+    display: none;
+    border-top: solid darkkhaki;
+    border-bottom: solid darkkhaki;
+    border-left: none;
+    border-right: none;
+    margin: 0;
+    padding: 0 1;
+    color: darkkhaki;
+}
+
+#note_input:focus {
+    border-top: solid goldenrod;
+    border-bottom: solid goldenrod;
+}
+
+#process_note_footer {
+    width: 100%;
+    height: 1;
+    background: darkkhaki;
+    color: black;
+    text-style: bold;
+    content-align: center middle;
+}
+
 Tree .tree--cursor {
     background: transparent;
     color: #0059ff;

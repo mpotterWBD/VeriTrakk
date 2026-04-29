@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -37,6 +37,7 @@ class MainScreen(Screen):
         Binding("s", "save_builder_process", "Save"),
         Binding("ctrl+s", "save_builder_process", "Save", priority=True),
         Binding("ctrl+t", "toggle_tags", "Tags"),
+        Binding("ctrl+n", "note", "Note", priority=True),
         Binding("ctrl+d", "delete_builder_node", "Delete", priority=True),
     
     ]
@@ -152,10 +153,12 @@ class MainScreen(Screen):
 
                     with Container(id="process_cont"):
                         self.tree_name = ""
+                        yield Input(placeholder="Add a note...", id="note_input")
                         prc_tree: Tree[str] = Tree("Process_Tree", id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
                         yield prc_tree
+                        yield Static("^N  Note", id="process_note_footer")
 
                     with Container(id="log_cont"):
                         yield Log(id="log_output", auto_scroll=False)
@@ -818,10 +821,17 @@ class MainScreen(Screen):
                 )
             except Exception:
                 return False
+        if action == "note":
+            try:
+                return self.query_one("#ms_content_switcher").current == "process_cont"
+            except Exception:
+                return False
         return True
 
     def action_back(self) -> None:
         if self.builder_tags_open:
+            return
+        if self.note_open:
             return
         self.builder_shift_armed = False
 
@@ -894,6 +904,75 @@ class MainScreen(Screen):
             tags_cont.display = False
             self.query_one("#builder_name_input", Input).focus()
 
+    def action_note(self) -> None:
+        if self.query_one("#ms_content_switcher").current != "process_cont":
+            return
+
+        tree = self.query_one("#process_tree", Tree)
+        note_input = self.query_one("#note_input", Input)
+
+        if not self.note_open:
+            node = tree.cursor_node
+            if node is None:
+                return
+
+            raw_label = str(node.label)
+            clean_label = raw_label.replace("[COMPLETE]    ", "").replace("  [COMPLETE]    ", "").strip()
+
+            try:
+                saved_f = read_root_and_file()
+                if "resume" in self.tab_selected:
+                    path = Path(saved_f[0].replace("\n", ""))
+                    file = saved_f[1].strip()
+                else:
+                    if self.select_data is Select.NULL:
+                        return
+                    path = self.root
+                    file = str(self.select_data)
+            except (IndexError, FileNotFoundError, OSError):
+                return
+
+            existing_note = get_note_for_label(clean_label, path, file)
+            note_input.value = existing_note
+            note_input.display = True
+            self.note_open = True
+            self.refresh_bindings()
+            note_input.focus()
+            note_input.cursor_position = len(note_input.value)
+
+        else:
+            note_text = note_input.value
+            node = tree.cursor_node
+
+            try:
+                saved_f = read_root_and_file()
+                if "resume" in self.tab_selected:
+                    path = Path(saved_f[0].replace("\n", ""))
+                    file = saved_f[1].strip()
+                else:
+                    if self.select_data is Select.NULL:
+                        path = None
+                        file = None
+                    else:
+                        path = self.root
+                        file = str(self.select_data)
+            except (IndexError, FileNotFoundError, OSError):
+                path = None
+                file = None
+
+            if path is not None and file and node is not None:
+                raw_label = str(node.label)
+                clean_label = raw_label.replace("[COMPLETE]    ", "").replace("  [COMPLETE]    ", "").strip()
+                set_note(clean_label, note_text, path, file)
+                if note_text:
+                    self.notify("Note saved.")
+
+            note_input.display = False
+            note_input.value = ""
+            self.note_open = False
+            self.refresh_bindings()
+            tree.focus()
+
     def _apply_staged_tag_visuals(self) -> None:
         subprocess_tab = self.query_one("#tag_subprocess", Tab)
         if "tag_subprocess" in self.builder_staged_tags:
@@ -903,6 +982,8 @@ class MainScreen(Screen):
 
     def action_select_down(self) -> None:
         if self.builder_tags_open:
+            return
+        if self.note_open:
             return
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
@@ -921,6 +1002,8 @@ class MainScreen(Screen):
     
     def action_select_up(self) -> None:
         if self.builder_tags_open:
+            return
+        if self.note_open:
             return
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
@@ -1133,6 +1216,7 @@ class MainScreen(Screen):
         self.builder_updating_tags = False
         self.builder_tags_open = False
         self.builder_staged_tags: set[str] = set()
+        self.note_open = False
         self.root = Path.home()
         self.log_root = Path.home()
         self.select_data = Select.NULL
@@ -1145,6 +1229,7 @@ class MainScreen(Screen):
         
         process_cont = self.query_one("#process_cont", Container)
         process_cont.border_title = "PROCESS TREE"
+        self.query_one("#note_input", Input).display = False
 
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
@@ -1200,12 +1285,24 @@ class MainScreen(Screen):
                 continue
             is_complete = "[S]|" in raw
             is_child = "[>]|" in raw
-            label = strip_date_tag(raw.replace("[S]|", "").replace("[>]|", "").strip())
+            label = strip_note_tag(strip_date_tag(raw.replace("[S]|", "").replace("[>]|", "").strip()))
 
-            # Parse completion date
+            # Parse note
+            note_text = ""
+            if "|[n=" in raw:
+                note_start = raw.find("|[n=") + 4
+                note_end = raw.find("]", note_start)
+                if note_end != -1:
+                    note_text = raw[note_start:note_end]
+
+            # Parse completion date (stop at first ] after [d= to avoid consuming note tags)
             date_str = ""
             if "|[d=" in raw:
-                date_str = raw.split("|[d=")[-1].rstrip("]").strip()
+                date_part = raw.split("|[d=", 1)[1]
+                end_idx = date_part.find("]")
+                if end_idx != -1:
+                    date_part = date_part[:end_idx]
+                date_str = date_part.strip()
                 try:
                     date_str = _dt.strptime(date_str, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
                 except ValueError:
@@ -1215,16 +1312,24 @@ class MainScreen(Screen):
 
             if is_child:
                 lines.append(f"    {label:<40} {status}")
+                if note_text:
+                    lines.append(f"      NOTE: {note_text}")
             else:
                 current_parent = label
                 lines.append(f"  {label:<42} {status}")
+                if note_text:
+                    lines.append(f"    NOTE: {note_text}")
 
         lines.append("")
         lines.append("=" * 60)
         log_text = "\n".join(lines)
 
         # Write .prcsslog file
-        log_file_name = file_name.replace("#COMPLETE.prcss", ".prcsslog").replace(".prcss", ".prcsslog")
+        log_file_name = (
+            file_name.replace("#COMPLETE.prcss", ".prcsslog")
+            if "#COMPLETE.prcss" in file_name
+            else file_name.replace(".prcss", ".prcsslog")
+        )
         try:
             with open(path / log_file_name, "w") as f:
                 f.write(log_text)
@@ -1325,29 +1430,29 @@ class MainScreen(Screen):
                 if "[S]" in x:
                     #Populates data that is COMPLETEful and is a child
                     current_node.allow_expand = True
-                    node_buffer = Text("[COMPLETE]    " + strip_date_tag(x.replace("[>]|","").replace("[S]|","").rstrip()))
+                    node_buffer = Text("[COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[>]|","").replace("[S]|","").rstrip())))
                     node_buffer.stylize("green")
                     current_node.add_leaf(node_buffer)
                     # current_node.label.stylize("green")
                 else:
                     #Populates data that is not complete and is a child
                     current_node.allow_expand = True
-                    current_node.add_leaf(strip_date_tag(x.replace("[>]|","").rstrip()))
+                    current_node.add_leaf(strip_note_tag(strip_date_tag(x.replace("[>]|","").rstrip())))
                     current_node.expand_all()
                 
             else:
                 #Populates items with children
                 if "[S]" in x and has_child(data,x):
-                    current_node = tree.root.add_leaf("[COMPLETE]    " + strip_date_tag(x.replace("[S]|","").rstrip()))
+                    current_node = tree.root.add_leaf("[COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip())))
                     current_node.label.stylize("green")
 
                 #Populates items without children
                 elif "[S]" in x and not has_child(data,x):
-                    current_node = tree.root.add_leaf("  [COMPLETE]    " + strip_date_tag(x.replace("[S]|","").rstrip()))
+                    current_node = tree.root.add_leaf("  [COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip())))
                     current_node.label.stylize("green")
 
                 else:
-                    current_node = tree.root.add(strip_date_tag(x.rstrip()),allow_expand=False)
+                    current_node = tree.root.add(strip_note_tag(strip_date_tag(x.rstrip())),allow_expand=False)
         
         # Recompute completion display from actual children state to fix any
         # inconsistent file state (e.g. root marked [S] but children aren't all complete)
