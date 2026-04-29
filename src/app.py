@@ -1392,6 +1392,17 @@ class MainScreen(Screen):
         self.query_one("#log_mode_tabs", Tabs).focus()
         self.notify(f"Published! Archived to data/logs/{log_file_name}")
 
+        # Clear the active process hint on the RESUME tab if it pointed to the dissolved file
+        try:
+            saved_f = read_root_and_file()
+            active_file = saved_f[1].strip() if len(saved_f) > 1 else ""
+            if active_file == file_name:
+                save_root(str(path), "")
+                resume_tab = self.query_one("#resume")
+                resume_tab.label = "RESUME \\[NONE]"
+        except (IndexError, FileNotFoundError, OSError):
+            pass
+
     def _display_prcsslog(self, file_name) -> None:
         if file_name is Select.NULL or not file_name:
             return
