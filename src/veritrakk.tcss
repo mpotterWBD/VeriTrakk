@@ -77,6 +77,11 @@ Header {
     height: 4;
 }
 
+#pb_mode_cont {
+    width: 100%;
+    height: 4;
+}
+
 #builder_mode_tab {
     width: 100%;
 }
@@ -199,5 +204,82 @@ Tree .tree--cursor {
     background: darkkhaki;
     height: 1;
     text-style: bold;
+}
+
+#log_mode_cont {
+    width: 100%;
+    height: 1fr;
+}
+
+#log_mode_switcher {
+    height: 100%;
+}
+
+#log_tabs_pane {
+    height: 4;
+}
+
+#log_mode_tabs {
+    width: 100%;
+}
+
+#log_dissolve_pane {
+    height: 100%;
+}
+
+#log_read_pane {
+    height: 100%;
+}
+
+#dissolve_select_cont {
+    border: double darkseagreen;
+    width: 100%;
+    height: 7%;
+}
+
+#dissolve_select {
+    color: darkkhaki;
+}
+
+#dissolve_file_cont {
+    border: double darkseagreen;
+    width: 100%;
+    height: 93%;
+}
+
+#dissolve_file_cont:focus-within {
+    border: double goldenrod;
+}
+
+#read_log_select_cont {
+    border: double darkseagreen;
+    width: 100%;
+    height: 7%;
+}
+
+#read_log_select {
+    color: darkkhaki;
+}
+
+#read_log_file_cont {
+    border: double darkseagreen;
+    width: 100%;
+    height: 93%;
+}
+
+#read_log_file_cont:focus-within {
+    border: double goldenrod;
+}
+
+#log_cont {
+    border: double darkseagreen;
+    width: 70%;
+    padding: 0;
+}
+
+#log_output {
+    width: 100%;
+    height: 100%;
+    color: darkkhaki;
 }
 

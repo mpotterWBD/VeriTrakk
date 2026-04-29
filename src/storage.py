@@ -1,6 +1,7 @@
 from asyncio.windows_events import NULL
 from pathlib import Path
 from tkinter.tix import Select
+from datetime import datetime
 
 working_dir = Path.cwd()
 data_dir = working_dir / 'data'
@@ -56,34 +57,43 @@ def number_of_files(files):
         count = count + 1
     return count
 
+def strip_date_tag(s: str) -> str:
+    """Remove |[d=...] completion timestamp from a line string."""
+    idx = s.find('|[d=')
+    if idx != -1:
+        return s[:idx]
+    return s
+
 #Appends the [S] status prefix to the specified line in the .prcss file
 def set_S(label, path, file_name):
     with open(path / file_name, 'r') as f:
         data = f.readlines()
     
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     # Find and modify the line matching the label
     modified_data = []
     for line in data:
         stripped_line = line.strip()
+        stripped_no_date = strip_date_tag(stripped_line)
         if "[>]" in stripped_line:
-            stripped_line = stripped_line.replace("[>]|","")
-            if stripped_line == label:
+            stripped_no_child = stripped_no_date.replace("[>]|","")
+            if stripped_no_child == label:
                 if "[S]" in line:
                     modified_data.append(line)
                 else:
-                    modified_data.append(f"[S]|{line}")
+                    modified_data.append(f"[S]|{line.rstrip()}|[d={timestamp}]\n")
             else:
                 modified_data.append(line)
 
-        elif stripped_line == label:
+        elif stripped_no_date == label:
             # Add [S] prefix with | delimiter
-            # Keep existing prefixes like [<] for subprocesses
             if line.startswith("[S]"):
                 # Already has [S], keep as is
                 modified_data.append(line)
             else:
-                # Add [S] prefix
-                modified_data.append(f"[S]|{line}")
+                # Add [S] prefix and completion timestamp
+                modified_data.append(f"[S]|{line.rstrip()}|[d={timestamp}]\n")
         else:
             modified_data.append(line)
     
@@ -109,24 +119,23 @@ def remove_S(label, path, file_name):
     modified_data = []
     for line in data:
         stripped_line = line.strip()
+        stripped_no_date = strip_date_tag(stripped_line)
         if "[>]" in stripped_line:
-            stripped_line = stripped_line.replace("[>]|","")
-            if stripped_line == label:
+            stripped_no_child = stripped_no_date.replace("[>]|","")
+            if stripped_no_child == label:
                 if "[S]" in line:
-                    modified_data.append(line.replace("[S]|",""))
+                    clean = strip_date_tag(line.replace("[S]|","").rstrip()) + "\n"
+                    modified_data.append(clean)
                 else:
                     modified_data.append(line)
             else:
                 modified_data.append(line)
 
-        elif stripped_line == label:
-            # Add [S] prefix with | delimiter
-            # Keep existing prefixes like [<] for subprocesses
-            if "[S]" in stripped_line:
-                # Already has [S], keep as is
-                modified_data.append(line.replace("[S]|",""))
+        elif stripped_no_date == label:
+            if "[S]" in stripped_no_date:
+                clean = strip_date_tag(line.replace("[S]|","").rstrip()) + "\n"
+                modified_data.append(clean)
             else:
-                # Removes [S] prefix
                 modified_data.append(line)
         else:
             modified_data.append(line)

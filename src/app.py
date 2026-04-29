@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -66,6 +66,7 @@ class MainScreen(Screen):
                                 Tab("OPEN", id="open"),
                                 Tab("RESUME", id="resume"),
                                 Tab("PROCESS BUILDER", id="processbuilder"),
+                                Tab("LOG", id="log"),
                                 id="or_tab"
 )
                             # or_tab = Tabs("OPEN","RESUME","PROCESS BUILDER",id="or_tab")
@@ -87,17 +88,49 @@ class MainScreen(Screen):
                             with Container(id="file_cont"):
                                 yield DirOnlyTree(Path.home(),id="file_tree")
 
+                        with Container(id="pb_mode_cont"):
+                            yield Tabs(
+                                Tab("NEW PROCESS", id="pb_new"),
+                                Tab("EDIT ACTIVE PROCESS", id="pb_edit"),
+                                id="builder_mode_tab",
+                            )
+
+                        with Container(id="log_mode_cont"):
+                            with ContentSwitcher(initial="log_tabs_pane", id="log_mode_switcher"):
+                                with Container(id="log_tabs_pane"):
+                                    yield Tabs(
+                                        Tab("DISSOLVE & PUBLISH", id="log_dissolve_tab"),
+                                        Tab("READ LOG", id="log_read_tab"),
+                                        id="log_mode_tabs",
+                                    )
+                                with Container(id="log_dissolve_pane"):
+                                    with Container(id="dissolve_select_cont"):
+                                        yield Select(
+                                            [],
+                                            id="dissolve_select",
+                                            compact=True,
+                                            prompt="Select completed process",
+                                            allow_blank=True,
+                                        )
+                                    with Container(id="dissolve_file_cont"):
+                                        yield DirOnlyTree(Path.home(), id="dissolve_file_tree")
+                                with Container(id="log_read_pane"):
+                                    with Container(id="read_log_select_cont"):
+                                        yield Select(
+                                            [],
+                                            id="read_log_select",
+                                            compact=True,
+                                            prompt="Select log file",
+                                            allow_blank=True,
+                                        )
+                                    with Container(id="read_log_file_cont"):
+                                        yield DirOnlyTree(Path.home(), id="read_log_file_tree")
+
                   
 
                 with ContentSwitcher(initial="",id="ms_content_switcher"):
                     with Container(id="process_builder"):
-                        with ContentSwitcher(initial="builder_mode_select", id="builder_content_switcher"):
-                            with Container(id="builder_mode_select"):
-                                yield Tabs(
-                                    Tab("NEW PROCESS", id="pb_new"),
-                                    Tab("EDIT ACTIVE PROCESS", id="pb_edit"),
-                                    id="builder_mode_tab",
-                                )
+                        with ContentSwitcher(initial="builder_save_dir_select", id="builder_content_switcher"):
 
                             with Container(id="builder_save_dir_select"):
                                 yield Static("SELECT DIRECTORY TO SAVE TO\n\nUse UP and DOWN to highlight a folder in the left file tree.\nPress F to select that folder.", id="builder_save_dir_prompt")
@@ -124,6 +157,9 @@ class MainScreen(Screen):
                         prc_tree.guide_depth = 5
                         yield prc_tree
 
+                    with Container(id="log_cont"):
+                        yield Log(id="log_output", auto_scroll=False)
+
 #CONTENTSWITCHER END
 #--------------------------------------------------------------------------------------
 
@@ -135,9 +171,8 @@ class MainScreen(Screen):
     def _show_process_builder_mode_select(self) -> None:
         self.tab_selected = "processbuilder"
         self.builder_save_dir = None
-        self.query_one("#or_content_switcher").current = "or_cont"
-        self.query_one("#ms_content_switcher").current = "process_builder"
-        self.query_one("#builder_content_switcher", ContentSwitcher).current = "builder_mode_select"
+        self.query_one("#or_content_switcher").current = "pb_mode_cont"
+        self.query_one("#ms_content_switcher").current = ""
         builder_mode_tab = self.query_one("#builder_mode_tab", Tabs)
         if not builder_mode_tab.active:
             builder_mode_tab.active = "pb_new"
@@ -145,6 +180,7 @@ class MainScreen(Screen):
 
     def _show_builder_save_directory_picker(self) -> None:
         self.query_one("#or_content_switcher").current = "file_and_select"
+        self.query_one("#ms_content_switcher").current = "process_builder"
         select = self.query_one("#process_select", Select)
         select.set_options([])
         select.clear()
@@ -177,7 +213,7 @@ class MainScreen(Screen):
             return
 
         self.builder_save_dir = Path(directory_path)
-        self.query_one("#or_content_switcher").current = "or_cont"
+        self.query_one("#or_content_switcher").current = "pb_mode_cont"
         self._open_process_builder_editor("pb_new")
 
     def _get_active_process_name(self) -> str:
@@ -209,7 +245,7 @@ class MainScreen(Screen):
 
             root_raw = str(data[0]).strip()
             root_is_complete = "[S]|" in root_raw
-            root_label = root_raw.replace("[S]|", "").replace("[>]|", "").strip()
+            root_label = strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip())
             root_display = f"[COMPLETE]    {root_label}" if root_is_complete else root_label
             builder_tree.reset(root_display)
             builder_tree.root.expand()
@@ -222,7 +258,7 @@ class MainScreen(Screen):
 
                 is_complete = "[S]|" in raw_line
                 is_child = "[>]|" in raw_line
-                label = raw_line.replace("[S]|", "").replace("[>]|", "").strip()
+                label = strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip())
                 if not label:
                     continue
 
@@ -258,6 +294,8 @@ class MainScreen(Screen):
     def _open_process_builder_editor(self, mode: str) -> None:
         builder_tree = self.query_one("#builder_tree", Tree)
         input_widget = self.query_one("#builder_name_input", Input)
+        self.query_one("#ms_content_switcher").current = "process_builder"
+        self.query_one("#or_content_switcher").current = "pb_mode_cont"
         self.query_one("#builder_content_switcher", ContentSwitcher).current = "builder_editor"
         self.builder_mode = mode
         self.builder_shift_armed = False
@@ -541,6 +579,9 @@ class MainScreen(Screen):
         if event.tabs.id == "builder_process_tags":
             return
 
+        if event.tabs.id == "log_mode_tabs":
+            return
+
         tab = self.query_one("#or_tab")
         resume_tab = self.query_one("#resume")
         try:
@@ -618,16 +659,44 @@ class MainScreen(Screen):
             event.stop()
             return
 
-        # Builder mode selection executes on a separate Enter keypress.
-        if self.query_one("#ms_content_switcher").current == "process_builder":
-            if self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_mode_select" and builder_mode_tab.has_focus:
-                mode = builder_mode_tab.active
-                if mode:
-                    if mode == "pb_new":
-                        self._show_builder_save_directory_picker()
-                    else:
-                        self._open_process_builder_editor(mode)
-                    event.stop()
+        if tab.has_focus and "log" in tab.active:
+            self.tab_selected = "log"
+            tab.active = ""
+            self.query_one("#or_content_switcher").current = "log_mode_cont"
+            self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_tabs_pane"
+            self.query_one("#log_mode_tabs", Tabs).focus()
+            event.stop()
+            return
+
+        # Log mode sub-tab selection
+        log_mode_tabs = self.query_one("#log_mode_tabs", Tabs)
+        if log_mode_tabs.has_focus and event.key == "enter":
+            mode = log_mode_tabs.active
+            if mode == "log_dissolve_tab":
+                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_dissolve_pane"
+                tree = self.query_one("#dissolve_file_tree")
+                tree.focus()
+                tree.root.expand()
+                tree.move_cursor(tree.root)
+            elif mode == "log_read_tab":
+                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_read_pane"
+                tree = self.query_one("#read_log_file_tree")
+                tree.focus()
+                tree.root.expand()
+                tree.move_cursor(tree.root)
+            event.stop()
+            return
+
+        # Builder mode selection — tabs are now in the left panel (pb_mode_cont)
+        if self.query_one("#or_content_switcher").current == "pb_mode_cont" and builder_mode_tab.has_focus:
+            mode = builder_mode_tab.active
+            if mode:
+                if mode == "pb_new":
+                    self._show_builder_save_directory_picker()
+                else:
+                    self._open_process_builder_editor(mode)
+                event.stop()
+            return
    
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         if self.query_one("#ms_content_switcher").current == "process_builder":
@@ -635,6 +704,41 @@ class MainScreen(Screen):
                 self.builder_save_dir = event.path
                 self.notify(f"Save directory ready: {event.path}. Press F to confirm.")
                 return
+
+        if self.tab_selected == "log":
+            log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
+            path = event.path
+            self.log_root = path
+
+            if log_pane == "log_dissolve_pane":
+                complete_files = [f.name for f in path.glob("*#COMPLETE.prcss")]
+                select = self.query_one("#dissolve_select", Select)
+                select_cont = self.query_one("#dissolve_select_cont")
+                file_cont = self.query_one("#dissolve_file_cont")
+                if complete_files:
+                    select_cont.styles.height = 4 + len(complete_files)
+                    file_cont.styles.height = "1fr"
+                    select.set_options([(f, f) for f in complete_files])
+                    select.focus()
+                else:
+                    select.set_options([])
+                    select.clear()
+                    self.notify("No completed processes found in this directory.")
+            elif log_pane == "log_read_pane":
+                log_files = [f.name for f in path.glob("*.prcsslog")]
+                select = self.query_one("#read_log_select", Select)
+                select_cont = self.query_one("#read_log_select_cont")
+                file_cont = self.query_one("#read_log_file_cont")
+                if log_files:
+                    select_cont.styles.height = 4 + len(log_files)
+                    file_cont.styles.height = "1fr"
+                    select.set_options([(f, f) for f in log_files])
+                    select.focus()
+                else:
+                    select.set_options([])
+                    select.clear()
+                    self.notify("No log files found in this directory.")
+            return
 
         select = self.query_one("#process_select")
         self.log("SELECTED PROCESS =",select.value)
@@ -720,13 +824,35 @@ class MainScreen(Screen):
         if self.builder_tags_open:
             return
         self.builder_shift_armed = False
+
+        # Back from log read view → go to log tabs
+        if self.query_one("#ms_content_switcher", ContentSwitcher).current == "log_cont":
+            self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
+            self.refresh_bindings()
+            self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_tabs_pane"
+            self.query_one("#log_mode_tabs", Tabs).focus()
+            return
+
+        # Back from a log pane → go to log tabs
+        if self.query_one("#or_content_switcher").current == "log_mode_cont":
+            log_switcher = self.query_one("#log_mode_switcher", ContentSwitcher)
+            if log_switcher.current in ("log_dissolve_pane", "log_read_pane"):
+                log_switcher.current = "log_tabs_pane"
+                self.query_one("#log_mode_tabs", Tabs).focus()
+                return
+
         if self.query_one("#ms_content_switcher", ContentSwitcher).current == "process_builder":
             builder_switcher = self.query_one("#builder_content_switcher", ContentSwitcher)
-            if builder_switcher.current == "builder_editor" or builder_switcher.current == "builder_save_dir_select":
-                builder_switcher.current = "builder_mode_select"
-                self.query_one("#or_content_switcher").current = "or_cont"
-                self.query_one("#builder_mode_tab", Tabs).focus()
+            if builder_switcher.current in ("builder_editor", "builder_save_dir_select"):
+                self._show_process_builder_mode_select()
                 return
+
+        # Back from pb_mode_cont → go to main tabs
+        if self.query_one("#or_content_switcher").current == "pb_mode_cont":
+            self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
+            self.query_one("#or_content_switcher").current = "or_cont"
+            self.query_one("#or_tab").focus()
+            return
 
         self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
         self.query_one("#or_content_switcher").current = "or_cont"
@@ -919,6 +1045,21 @@ class MainScreen(Screen):
                 parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
                 node.parent.parent.set_label(Text(succ_c + parents_parent_label, style="green"))
                 set_S(str(parents_parent_label), path, file)
+
+        #Rename file when all top-level processes are complete
+        all_root_complete = (
+            len(tree.root.children) > 0
+            and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
+        )
+        if all_root_complete and "#COMPLETE" not in file:
+            new_file = file.replace(".prcss", "#COMPLETE.prcss")
+            try:
+                (path / file).rename(path / new_file)
+                save_root(str(path), new_file)
+                self.select_data = new_file
+                self.notify(f"Process complete! File renamed to {new_file}")
+            except OSError as e:
+                self.notify(f"Could not rename file: {e}", severity="error")
         
     def action_select_left(self) -> None:
         if self.builder_tags_open:
@@ -970,6 +1111,19 @@ class MainScreen(Screen):
             remove_S("[S]|" + str(parents_parent_label), path, file)
             node.parent.parent.label = parents_parent_label
             node.parent.parent.label.stylize("default")
+
+        #Rename back if file was marked #COMPLETE but is no longer fully complete
+        if "#COMPLETE" in file:
+            not_all_complete = any("[COMPLETE]" not in str(child.label) for child in tree.root.children)
+            if not_all_complete:
+                old_file = file.replace("#COMPLETE.prcss", ".prcss")
+                try:
+                    (path / file).rename(path / old_file)
+                    save_root(str(path), old_file)
+                    self.select_data = old_file
+                    self.notify(f"Process incomplete — file renamed back to {old_file}")
+                except OSError as e:
+                    self.notify(f"Could not rename file: {e}", severity="error")
                 
     def on_mount(self) -> None:
         self.tab_selected = ""
@@ -980,6 +1134,7 @@ class MainScreen(Screen):
         self.builder_tags_open = False
         self.builder_staged_tags: set[str] = set()
         self.root = Path.home()
+        self.log_root = Path.home()
         self.select_data = Select.NULL
 
         self.title = "WELCOME TO VERITRAK"
@@ -1006,8 +1161,131 @@ class MainScreen(Screen):
         select = self.query_one("#process_select", Select)
         select.clear()
 
+    def _generate_log(self, file_name) -> None:
+        if file_name is Select.NULL or not file_name:
+            return
+
+        path = self.log_root
+        try:
+            data = file_reader(path, file_name)
+        except OSError as e:
+            self.notify(f"Could not read file: {e}", severity="error")
+            return
+
+        from datetime import datetime as _dt
+
+        lines = []
+        process_name = strip_date_tag(str(data[0]).replace("[S]|", "").strip()) if data else file_name
+
+        # Parse completion date from root line if present
+        root_raw = str(data[0]).strip() if data else ""
+        root_date = ""
+        if "|[d=" in root_raw:
+            root_date = root_raw.split("|[d=")[-1].rstrip("]").strip()
+            try:
+                root_date = _dt.strptime(root_date, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+
+        lines.append(f"PROCESS LOG: {process_name}")
+        if root_date:
+            lines.append(f"Completed: {root_date}")
+        lines.append("=" * 60)
+        lines.append("")
+
+        current_parent = None
+        for raw in data[1:]:
+            raw = raw.strip()
+            if not raw:
+                continue
+            is_complete = "[S]|" in raw
+            is_child = "[>]|" in raw
+            label = strip_date_tag(raw.replace("[S]|", "").replace("[>]|", "").strip())
+
+            # Parse completion date
+            date_str = ""
+            if "|[d=" in raw:
+                date_str = raw.split("|[d=")[-1].rstrip("]").strip()
+                try:
+                    date_str = _dt.strptime(date_str, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    pass
+
+            status = f"[COMPLETE - {date_str}]" if is_complete and date_str else ("[COMPLETE]" if is_complete else "[INCOMPLETE]")
+
+            if is_child:
+                lines.append(f"    {label:<40} {status}")
+            else:
+                current_parent = label
+                lines.append(f"  {label:<42} {status}")
+
+        lines.append("")
+        lines.append("=" * 60)
+        log_text = "\n".join(lines)
+
+        # Write .prcsslog file
+        log_file_name = file_name.replace("#COMPLETE.prcss", ".prcsslog").replace(".prcss", ".prcsslog")
+        try:
+            with open(path / log_file_name, "w") as f:
+                f.write(log_text)
+        except OSError as e:
+            self.notify(f"Could not write log: {e}", severity="error")
+            return
+
+        # Copy log to data/logs/
+        logs_dir = Path.cwd() / "data" / "logs"
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            (logs_dir / log_file_name).write_text(log_text)
+        except OSError as e:
+            self.notify(f"Could not copy to logs dir: {e}", severity="error")
+            return
+
+        # Delete the #COMPLETE.prcss file
+        prcss_path = path / file_name
+        if prcss_path.exists():
+            try:
+                prcss_path.unlink()
+            except OSError as e:
+                self.notify(f"Could not delete process file: {e}", severity="error")
+                return
+        else:
+            self.notify(f"Warning: {file_name} not found to delete", severity="warning")
+
+        # Go back to log mode tabs
+        self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_tabs_pane"
+        self.query_one("#dissolve_select", Select).set_options([])
+        self.query_one("#dissolve_select", Select).clear()
+        self.query_one("#log_mode_tabs", Tabs).focus()
+        self.notify(f"Published! Archived to data/logs/{log_file_name}")
+
+    def _display_prcsslog(self, file_name) -> None:
+        if file_name is Select.NULL or not file_name:
+            return
+        path = self.log_root
+        try:
+            log_text = (path / file_name).read_text()
+        except OSError as e:
+            self.notify(f"Could not read log: {e}", severity="error")
+            return
+
+        log_widget = self.query_one("#log_output", Log)
+        log_widget.clear()
+        for line in log_text.splitlines():
+            log_widget.write_line(line)
+        self.query_one("#ms_content_switcher").current = "log_cont"
+        self.refresh_bindings()
+
     def on_select_changed(self, event: Select.Changed) -> None:
-        
+
+        if event.select.id == "dissolve_select":
+            self._generate_log(event.value)
+            return
+
+        if event.select.id == "read_log_select":
+            self._display_prcsslog(event.value)
+            return
+
         self.select_data = self.query_one("#process_select").value
         tab = self.query_one("#or_tab")
 
@@ -1031,7 +1309,7 @@ class MainScreen(Screen):
         self.log("DATA = ", data)
 
         if "[S]" in tree.root.label:
-            new_root_label = "[COMPLETE]    " + str(tree.root.label).replace("[S]|","")
+            new_root_label = "[COMPLETE]    " + strip_date_tag(str(tree.root.label).replace("[S]|","").rstrip())
             tree.root.label = new_root_label
             tree.root.label.stylize("green")
             tree.root.collapse()
@@ -1047,30 +1325,50 @@ class MainScreen(Screen):
                 if "[S]" in x:
                     #Populates data that is COMPLETEful and is a child
                     current_node.allow_expand = True
-                    node_buffer = Text("[COMPLETE]    " + x.replace("[>]|","").replace("[S]|",""))
+                    node_buffer = Text("[COMPLETE]    " + strip_date_tag(x.replace("[>]|","").replace("[S]|","").rstrip()))
                     node_buffer.stylize("green")
                     current_node.add_leaf(node_buffer)
                     # current_node.label.stylize("green")
                 else:
                     #Populates data that is not complete and is a child
                     current_node.allow_expand = True
-                    current_node.add_leaf(x.replace("[>]|",""))
+                    current_node.add_leaf(strip_date_tag(x.replace("[>]|","").rstrip()))
                     current_node.expand_all()
                 
             else:
                 #Populates items with children
                 if "[S]" in x and has_child(data,x):
-                    current_node = tree.root.add_leaf("[COMPLETE]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("[COMPLETE]    " + strip_date_tag(x.replace("[S]|","").rstrip()))
                     current_node.label.stylize("green")
 
                 #Populates items without children
                 elif "[S]" in x and not has_child(data,x):
-                    current_node = tree.root.add_leaf("  [COMPLETE]    " + x.replace("[S]|",""))
+                    current_node = tree.root.add_leaf("  [COMPLETE]    " + strip_date_tag(x.replace("[S]|","").rstrip()))
                     current_node.label.stylize("green")
 
                 else:
-                    current_node = tree.root.add(x,allow_expand=False)
+                    current_node = tree.root.add(strip_date_tag(x.rstrip()),allow_expand=False)
         
+        # Recompute completion display from actual children state to fix any
+        # inconsistent file state (e.g. root marked [S] but children aren't all complete)
+        succ_c_load = "[COMPLETE]    "
+        for top_node in tree.root.children:
+            if top_node.children:
+                all_sub_complete = all("[COMPLETE]" in str(child.label) for child in top_node.children)
+                if not all_sub_complete and "[COMPLETE]" in str(top_node.label):
+                    clean = str(top_node.label).replace(succ_c_load, "").strip()
+                    top_node.set_label(clean)
+                    top_node.expand()
+
+        all_top_complete = (
+            len(tree.root.children) > 0
+            and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
+        )
+        if not all_top_complete and "[COMPLETE]" in str(tree.root.label):
+            root_clean = str(tree.root.label).replace(succ_c_load, "").strip()
+            tree.root.label = root_clean
+            tree.root.expand()
+
         if "resume" in self.tab_selected:
             self.query_one("#ms_content_switcher").current = "process_cont"
         
