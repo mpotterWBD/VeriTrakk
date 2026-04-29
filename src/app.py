@@ -32,6 +32,7 @@ class MainScreen(Screen):
         Binding("left", "select_left"),
         Binding("b", "back", "Back"),
         Binding("ctrl+b", "unfocus_input", "Back"),
+        Binding("c", "check_dir", "Check Dir"),
         Binding("f", "select_builder_directory", "Select Dir"),
         Binding("ctrl+a", "arm_builder_shift", "Shift", priority=True),
         Binding("s", "save_builder_process", "Save"),
@@ -88,6 +89,7 @@ class MainScreen(Screen):
                             )
                             with Container(id="file_cont"):
                                 yield DirOnlyTree(Path.home(),id="file_tree")
+                            yield Static("C  Check Dir", id="open_check_footer")
 
                         with Container(id="pb_mode_cont"):
                             yield Tabs(
@@ -115,6 +117,7 @@ class MainScreen(Screen):
                                         )
                                     with Container(id="dissolve_file_cont"):
                                         yield DirOnlyTree(Path.home(), id="dissolve_file_tree")
+                                    yield Static("C  Check Dir", id="dissolve_check_footer")
                                 with Container(id="log_read_pane"):
                                     with Container(id="read_log_select_cont"):
                                         yield Select(
@@ -126,6 +129,7 @@ class MainScreen(Screen):
                                         )
                                     with Container(id="read_log_file_cont"):
                                         yield DirOnlyTree(Path.home(), id="read_log_file_tree")
+                                    yield Static("C  Check Dir", id="read_log_check_footer")
 
                   
 
@@ -712,6 +716,17 @@ class MainScreen(Screen):
             log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
             path = event.path
             self.log_root = path
+            return
+
+        path = event.path
+        self.root = path
+        self.log("Directory highlighted =", str(path))
+        self.refresh_bindings()
+
+    def action_check_dir(self) -> None:
+        if self.tab_selected == "log":
+            log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
+            path = self.log_root
 
             if log_pane == "log_dissolve_pane":
                 complete_files = [f.name for f in path.glob("*#COMPLETE.prcss")]
@@ -743,13 +758,11 @@ class MainScreen(Screen):
                     self.notify("No log files found in this directory.")
             return
 
-        select = self.query_one("#process_select")
-        self.log("SELECTED PROCESS =",select.value)
-        path = event.path
-        self.root = path
-        matches = list(path.glob("*.prcss"))
-        if matches:
-            files = file_parser_selected(path)
+        path = self.root
+        select = self.query_one("#process_select", Select)
+        self.log("SELECTED PROCESS =", select.value)
+        files = file_parser_selected(path)
+        if files:
             nof = number_of_files(files)
             options = [(x, x) for x in files]
             select_cont = self.query_one("#select_cont")
@@ -757,8 +770,12 @@ class MainScreen(Screen):
             select_cont.styles.height = 4 + nof
             file_cont.styles.height = "1fr"
             self.log("number of files = " + str(nof))
-            self.query_one("#process_select", Select).set_options(options)
-            self.query_one("#process_select", Select).focus()
+            select.set_options(options)
+            select.focus()
+        else:
+            select.set_options([])
+            select.clear()
+            self.notify("No process files found in this directory.")
 
     def on_directory_tree_node_selected(self, event: DirectoryTree.NodeSelected) -> None:
         if self.query_one("#ms_content_switcher").current == "process_builder":
@@ -824,6 +841,17 @@ class MainScreen(Screen):
         if action == "note":
             try:
                 return self.query_one("#ms_content_switcher").current == "process_cont"
+            except Exception:
+                return False
+        if action == "check_dir":
+            try:
+                or_sw = self.query_one("#or_content_switcher").current
+                if or_sw == "file_and_select" and self.tab_selected in ("open", ""):
+                    return True
+                if self.tab_selected == "log":
+                    log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
+                    return log_pane in ("log_dissolve_pane", "log_read_pane")
+                return False
             except Exception:
                 return False
         return True

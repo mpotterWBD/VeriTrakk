@@ -314,3 +314,14 @@ Tree .tree--cursor {
     color: darkkhaki;
 }
 
+#open_check_footer,
+#dissolve_check_footer,
+#read_log_check_footer {
+    width: 100%;
+    height: 1;
+    background: darkkhaki;
+    color: black;
+    text-style: bold;
+    content-align: center middle;
+}
+
