@@ -1,11 +1,46 @@
 
 #ms_content_switcher {
-    width: 100%;
+    width: 1fr;
+    height: 1fr;
 }
+
+#home_panel {
+    width: 1fr;
+    height: 1fr;
+    border: double darkseagreen;
+    padding: 0 2;
+}
+
+#home_markdown {
+    width: 100%;
+    color: darkkhaki;
+    background: transparent;
+    scrollbar-size: 1 1;
+}
+
+#home_panel MarkdownH1 {
+    color: lightsalmon;
+    text-style: bold;
+}
+
+#home_panel MarkdownH2 {
+    color: darkseagreen;
+    text-style: bold;
+}
+
+#home_panel MarkdownH3 {
+    color: cadetblue;
+}
+
+#home_panel MarkdownCode {
+    color: goldenrod;
+    background: transparent;
+}
+
 #file_cont {
     border: double darkseagreen;
     width: 100%;
-    height: 93%;
+    height: 100%;
 }
 
 #file_cont:focus-within {
@@ -50,7 +85,7 @@ Header {
 
 #or_cont{
     
-    height: 4;
+    height: auto;
 }
 
 #or_tab{
@@ -161,7 +196,7 @@ Header {
 
 #process_cont{
     border: double darkseagreen;
-    width: 70%;
+    width: 1fr;
     padding: 0;
 }
 
@@ -187,15 +222,6 @@ Header {
     border-bottom: solid goldenrod;
 }
 
-#process_note_footer {
-    width: 100%;
-    height: 1;
-    background: darkkhaki;
-    color: black;
-    text-style: bold;
-    content-align: center middle;
-}
-
 Tree .tree--cursor {
     background: transparent;
     color: #0059ff;
@@ -218,6 +244,25 @@ Tree .tree--cursor {
     border: double darkseagreen;
     width: 100%;
     height: 7%;
+}
+
+#or_content_switcher {
+    height: 1fr;
+}
+
+#open_browse_cont {
+    width: 100%;
+    height: 1fr;
+}
+
+#open_file_tree {
+    border: double darkseagreen;
+    width: 100%;
+    height: 1fr;
+}
+
+#open_file_tree:focus-within {
+    border: double goldenrod;
 }
 
 #tab_placeholder{
@@ -246,12 +291,16 @@ Tree .tree--cursor {
     height: 100%;
 }
 
-#log_tabs_pane {
-    height: 4;
+#pb_mode_select {
+    display: none;
+    margin-left: 14;
+    color: darkkhaki;
 }
 
-#log_mode_tabs {
-    width: 100%;
+#log_mode_select {
+    display: none;
+    margin-left: 31;
+    color: darkkhaki;
 }
 
 #log_dissolve_pane {
@@ -262,43 +311,23 @@ Tree .tree--cursor {
     height: 100%;
 }
 
-#dissolve_select_cont {
+#dissolve_file_tree {
     border: double darkseagreen;
     width: 100%;
-    height: 7%;
+    height: 100%;
 }
 
-#dissolve_select {
-    color: darkkhaki;
-}
-
-#dissolve_file_cont {
-    border: double darkseagreen;
-    width: 100%;
-    height: 93%;
-}
-
-#dissolve_file_cont:focus-within {
+#dissolve_file_tree:focus-within {
     border: double goldenrod;
 }
 
-#read_log_select_cont {
+#read_log_file_tree {
     border: double darkseagreen;
     width: 100%;
-    height: 7%;
+    height: 100%;
 }
 
-#read_log_select {
-    color: darkkhaki;
-}
-
-#read_log_file_cont {
-    border: double darkseagreen;
-    width: 100%;
-    height: 93%;
-}
-
-#read_log_file_cont:focus-within {
+#read_log_file_tree:focus-within {
     border: double goldenrod;
 }
 
@@ -312,16 +341,5 @@ Tree .tree--cursor {
     width: 100%;
     height: 100%;
     color: darkkhaki;
-}
-
-#open_check_footer,
-#dissolve_check_footer,
-#read_log_check_footer {
-    width: 100%;
-    height: 1;
-    background: darkkhaki;
-    color: black;
-    text-style: bold;
-    content-align: center middle;
 }
 
