@@ -150,15 +150,11 @@ class MainScreen(Screen):
                                 [("NEW PROCESS", "pb_new"), ("EDIT ACTIVE PROCESS", "pb_edit")],
                                 id="pb_mode_select",
                                 compact=True,
-                                prompt="Select mode",
-                                allow_blank=True,
                             )
                             yield Select(
                                 [("DISSOLVE & PUBLISH", "log_dissolve"), ("READ LOG", "log_read")],
                                 id="log_mode_select",
                                 compact=True,
-                                prompt="Select mode",
-                                allow_blank=True,
                             )
                     
                     
@@ -258,7 +254,6 @@ class MainScreen(Screen):
             return
 
         self.builder_save_dir = Path(directory_path)
-        self.query_one("#or_content_switcher").current = "pb_mode_cont"
         self._open_process_builder_editor("pb_new")
 
     def _get_active_process_name(self) -> str:
@@ -996,10 +991,26 @@ class MainScreen(Screen):
             return
         tab = self.query_one("#or_tab")
         if tab.has_focus and "processbuilder" in tab.active:
-            self.query_one("#pb_mode_select", Select).focus()
+            sel = self.query_one("#pb_mode_select", Select)
+            sel.focus()
+            sel.expanded = True
+            def _jump_pb():
+                try:
+                    sel.query_one(SelectOverlay).highlighted = 0
+                except Exception:
+                    pass
+            self.call_after_refresh(lambda: self.call_after_refresh(_jump_pb))
             return
         if tab.has_focus and "log" in tab.active:
-            self.query_one("#log_mode_select", Select).focus()
+            sel = self.query_one("#log_mode_select", Select)
+            sel.focus()
+            sel.expanded = True
+            def _jump_log():
+                try:
+                    sel.query_one(SelectOverlay).highlighted = 0
+                except Exception:
+                    pass
+            self.call_after_refresh(lambda: self.call_after_refresh(_jump_log))
             return
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
