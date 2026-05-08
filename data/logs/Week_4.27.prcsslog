@@ -1,0 +1,24 @@
+PROCESS LOG: Week 4/27/2026
+Completed: 2026-05-08 10:10:36
+============================================================
+
+  Packet Driver                              [COMPLETE - 2026-05-08 10:10:36]
+    Work with Harrison to figure out what data he would like [COMPLETE - 2026-05-08 10:10:36]
+      NOTE: Built a Tool that monitors packets
+  Help Brett with his GST-40/90 Question     [COMPLETE]
+  Help Brett with questions concerning 3 phase nomenclature [COMPLETE - 2026-05-08 10:10:29]
+  Help Craig with 3 phase wiring guage for GAF Round Vat [COMPLETE - 2026-05-08 10:10:29]
+  OQS                                        [COMPLETE]
+    Determine how we will split the fiber and mount it [COMPLETE]
+      NOTE: Using Light Guides
+    Order Light Guides                       [COMPLETE - 2026-05-08 10:10:30]
+    Begin design for Oil Optical Resivoir    [COMPLETE - 2026-05-08 10:10:31]
+    Find the appropriate lenses for desgin   [COMPLETE - 2026-05-08 10:10:31]
+  AUTO FILTER                                [COMPLETE]
+    Create New Fab Drawing for AF            [COMPLETE]
+    Create New Assy Drawing                  [COMPLETE]
+    Send BOM and Design Files to JOSH B, TREVER, and Toxee, CC Zach [COMPLETE]
+    Upload AF Code to Azure Repo             [COMPLETE]
+    Address PCBways BOM Notes                [COMPLETE - 2026-05-08 10:10:33]
+
+============================================================

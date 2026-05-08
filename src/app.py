@@ -1534,6 +1534,7 @@ class MainScreen(Screen):
                 tree.focus()
                 tree.root.expand()
                 tree.move_cursor(tree.root)
+                self.call_after_refresh(self._expand_dissolve_tree_to_active)
             elif mode == "log_read":
                 self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_read_pane"
                 tree = self.query_one("#read_log_file_tree")
@@ -1545,9 +1546,56 @@ class MainScreen(Screen):
         if event.select.id == "dissolve_select":
             return
 
-        if event.select.id == "read_log_select":
+    def _expand_dissolve_tree_to_active(self) -> None:
+        """Expand the dissolve file tree and move cursor to the active process file."""
+        try:
+            saved_f = read_root_and_file()
+            target_dir = Path(saved_f[0].replace("\n", ""))
+            target_file = saved_f[1].strip()
+            if not target_file:
+                return
+            target_path = target_dir / target_file
+        except (IndexError, OSError):
             return
-        
+
+        tree = self.query_one("#dissolve_file_tree")
+        tree_root_path = Path.home()
+
+        try:
+            rel_parts = list(target_dir.relative_to(tree_root_path).parts)
+        except ValueError:
+            return  # Active process not under home directory
+
+        def _navigate(node, remaining_parts):
+            if not remaining_parts:
+                # Look for the file node among the current node's children
+                for child in node.children:
+                    try:
+                        if child.data.path == target_path:
+                            tree.move_cursor(child)
+                            return
+                    except AttributeError:
+                        pass
+                # File node not visible (not #COMPLETE), settle on the directory
+                tree.move_cursor(node)
+                return
+
+            next_name = remaining_parts[0]
+            for child in node.children:
+                try:
+                    if child.data.path.name == next_name:
+                        child.expand()
+                        self.call_after_refresh(
+                            lambda c=child, r=remaining_parts[1:]: _navigate(c, r)
+                        )
+                        return
+                except AttributeError:
+                    pass
+            # Directory not found in tree (maybe not loaded yet), stay on current node
+            tree.move_cursor(node)
+
+        _navigate(tree.root, rel_parts)
+
 class DirOnlyTree(DirectoryTree):
     def on_show(self) -> None:
         self.root.expand()
