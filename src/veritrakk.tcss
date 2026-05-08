@@ -177,11 +177,16 @@ Header {
 
 #builder_process_tags Tab.-active {
     background: transparent;
-    color: darkseagreen;
+    color: #555555;
 }
 
 #builder_process_tags Tab.tag-staged {
-    color: darkkhaki;
+    color: green;
+    text-style: bold;
+}
+
+#builder_process_tags Tab.tag-staged.-active {
+    color: green;
     text-style: bold;
 }
 
