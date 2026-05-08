@@ -2,6 +2,7 @@ from textual.app import App, ComposeResult
 from textual.reactive import reactive
 from textual.events import Key
 from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs, Tab, TabbedContent, Input
+from textual.widgets._select import SelectOverlay
 from textual.binding import Binding
 from pathlib import Path
 from textual.screen import Screen
@@ -10,7 +11,7 @@ from pathlib import Path
 import re
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note, read_all_notes
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -21,18 +22,89 @@ FIGLET = """
 ┗┛┗┛┛┗┻ ┻ ┛┗┛┗┛┗┛
 """
 
+HOME_MD = """\
+# VeriTrakk
+
+**Process tracking, built for the floor.**
+
+VeriTrakk lets you build structured process checklists, track them step-by-step in real time, and publish completed runs as permanent log files — all from the keyboard.
+
+---
+
+## Navigation
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` | Move between tabs / select options / navigate trees |
+| `→` | Mark a step **complete** |
+| `←` | Un-mark a step |
+| `Enter` | Confirm selection |
+| `B` | Go back |
+
+---
+
+## Tabs
+
+### OPEN
+Browse a directory and select a `.prcss` process file to run interactively.
+
+### RESUME
+Re-open the last active process right where you left off.
+
+### PROCESS BUILDER
+Create or edit structured process files.
+
+- **NEW PROCESS** — Start fresh. Choose a save directory, then build your checklist tree.
+- **EDIT ACTIVE PROCESS** — Load the current active process into the builder for editing.
+
+### LOG
+Work with completed processes.
+
+- **DISSOLVE & PUBLISH** — Convert a `#COMPLETE` process into a timestamped `.prcsslog` archive and remove the source file.
+- **READ LOG** — Browse and display any existing `.prcsslog` file.
+
+---
+
+## Process Builder Controls
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+S` / `S` | Save process |
+| `↑` `↓` | Navigate tree nodes |
+| `Ctrl+A` then `↑`/`↓` | Insert blank node above / below |
+| `Ctrl+D` | Delete selected node |
+| `Ctrl+T` | Toggle **Sub Process** tag |
+| `Ctrl+N` | Add / edit a note on the selected step |
+| `F` | Confirm save directory |
+| `Ctrl+B` | Exit builder back to mode select |
+
+---
+
+## File Types
+
+| Extension | Description |
+|-----------|-------------|
+| `.prcss` | Active process checklist |
+| `#COMPLETE.prcss` | Fully completed process, ready to publish |
+| `.prcsslog` | Published log archive |
+
+---
+
+*Powered by Westbound Designs*
+"""
+
 class MainScreen(Screen):
     # TITLE = "WELCOME TO VERITRAKK"
    
 
     BINDINGS = [
+        Binding("up", "mode_select_up", priority=True, show=False),
         Binding("up", "select_up"),
         Binding("down", "select_down"),
         Binding("right", "select_right"),
         Binding("left", "select_left"),
         Binding("b", "back", "Back"),
         Binding("ctrl+b", "unfocus_input", "Back"),
-        Binding("c", "check_dir", "Check Dir"),
         Binding("f", "select_builder_directory", "Select Dir"),
         Binding("ctrl+a", "arm_builder_shift", "Shift", priority=True),
         Binding("s", "save_builder_process", "Save"),
@@ -74,66 +146,37 @@ class MainScreen(Screen):
                             # or_tab = Tabs("OPEN","RESUME","PROCESS BUILDER",id="or_tab")
                             
                             yield or_tab
-                    
-                    
-                        with Container(id="file_and_select"):
-                            with Container(id="select_cont"):   
-
-                                options = []
-                                yield Select(
-                                options,
-                                id="process_select",
+                            yield Select(
+                                [("NEW PROCESS", "pb_new"), ("EDIT ACTIVE PROCESS", "pb_edit")],
+                                id="pb_mode_select",
                                 compact=True,
-                                prompt="Select",
-                                allow_blank=True
                             )
+                            yield Select(
+                                [("DISSOLVE & PUBLISH", "log_dissolve"), ("READ LOG", "log_read")],
+                                id="log_mode_select",
+                                compact=True,
+                            )
+                    
+                    
+                        with Container(id="open_browse_cont"):
+                            yield ProcessFileTree(Path.home(), id="open_file_tree")
+
+                        with Container(id="file_and_select"):
                             with Container(id="file_cont"):
                                 yield DirOnlyTree(Path.home(),id="file_tree")
-                            yield Static("C  Check Dir", id="open_check_footer")
-
-                        with Container(id="pb_mode_cont"):
-                            yield Tabs(
-                                Tab("NEW PROCESS", id="pb_new"),
-                                Tab("EDIT ACTIVE PROCESS", id="pb_edit"),
-                                id="builder_mode_tab",
-                            )
 
                         with Container(id="log_mode_cont"):
-                            with ContentSwitcher(initial="log_tabs_pane", id="log_mode_switcher"):
-                                with Container(id="log_tabs_pane"):
-                                    yield Tabs(
-                                        Tab("DISSOLVE & PUBLISH", id="log_dissolve_tab"),
-                                        Tab("READ LOG", id="log_read_tab"),
-                                        id="log_mode_tabs",
-                                    )
+                            with ContentSwitcher(initial="", id="log_mode_switcher"):
                                 with Container(id="log_dissolve_pane"):
-                                    with Container(id="dissolve_select_cont"):
-                                        yield Select(
-                                            [],
-                                            id="dissolve_select",
-                                            compact=True,
-                                            prompt="Select completed process",
-                                            allow_blank=True,
-                                        )
-                                    with Container(id="dissolve_file_cont"):
-                                        yield DirOnlyTree(Path.home(), id="dissolve_file_tree")
-                                    yield Static("C  Check Dir", id="dissolve_check_footer")
+                                    yield CompleteProcessFileTree(Path.home(), id="dissolve_file_tree")
                                 with Container(id="log_read_pane"):
-                                    with Container(id="read_log_select_cont"):
-                                        yield Select(
-                                            [],
-                                            id="read_log_select",
-                                            compact=True,
-                                            prompt="Select log file",
-                                            allow_blank=True,
-                                        )
-                                    with Container(id="read_log_file_cont"):
-                                        yield DirOnlyTree(Path.home(), id="read_log_file_tree")
-                                    yield Static("C  Check Dir", id="read_log_check_footer")
+                                    yield LogFileTree(Path.home(), id="read_log_file_tree")
 
                   
 
-                with ContentSwitcher(initial="",id="ms_content_switcher"):
+                with ContentSwitcher(initial="home_panel",id="ms_content_switcher"):
+                    with VerticalScroll(id="home_panel"):
+                        yield Markdown(HOME_MD, id="home_markdown")
                     with Container(id="process_builder"):
                         with ContentSwitcher(initial="builder_save_dir_select", id="builder_content_switcher"):
 
@@ -162,7 +205,6 @@ class MainScreen(Screen):
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
                         yield prc_tree
-                        yield Static("^N  Note", id="process_note_footer")
 
                     with Container(id="log_cont"):
                         yield Log(id="log_output", auto_scroll=False)
@@ -178,22 +220,14 @@ class MainScreen(Screen):
     def _show_process_builder_mode_select(self) -> None:
         self.tab_selected = "processbuilder"
         self.builder_save_dir = None
-        self.query_one("#or_content_switcher").current = "pb_mode_cont"
-        self.query_one("#ms_content_switcher").current = ""
-        builder_mode_tab = self.query_one("#builder_mode_tab", Tabs)
-        if not builder_mode_tab.active:
-            builder_mode_tab.active = "pb_new"
-        builder_mode_tab.focus()
+        self.query_one("#or_content_switcher").current = "or_cont"
+        self.query_one("#ms_content_switcher").current = "home_panel"
+        self.query_one("#or_tab").active = "processbuilder"
+        self.call_after_refresh(lambda: self.query_one("#or_tab").focus())
 
     def _show_builder_save_directory_picker(self) -> None:
         self.query_one("#or_content_switcher").current = "file_and_select"
         self.query_one("#ms_content_switcher").current = "process_builder"
-        select = self.query_one("#process_select", Select)
-        select.set_options([])
-        select.clear()
-        select_cont = self.query_one("#select_cont")
-        select_cont.styles.height = "7%"
-
         self.query_one("#builder_content_switcher", ContentSwitcher).current = "builder_save_dir_select"
         file_tree = self.query_one("#file_tree", Tree)
         file_tree.focus()
@@ -220,7 +254,6 @@ class MainScreen(Screen):
             return
 
         self.builder_save_dir = Path(directory_path)
-        self.query_one("#or_content_switcher").current = "pb_mode_cont"
         self._open_process_builder_editor("pb_new")
 
     def _get_active_process_name(self) -> str:
@@ -252,7 +285,7 @@ class MainScreen(Screen):
 
             root_raw = str(data[0]).strip()
             root_is_complete = "[S]|" in root_raw
-            root_label = strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip())
+            root_label = strip_note_tag(strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip()))
             root_display = f"[COMPLETE]    {root_label}" if root_is_complete else root_label
             builder_tree.reset(root_display)
             builder_tree.root.expand()
@@ -265,7 +298,7 @@ class MainScreen(Screen):
 
                 is_complete = "[S]|" in raw_line
                 is_child = "[>]|" in raw_line
-                label = strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip())
+                label = strip_note_tag(strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip()))
                 if not label:
                     continue
 
@@ -302,7 +335,7 @@ class MainScreen(Screen):
         builder_tree = self.query_one("#builder_tree", Tree)
         input_widget = self.query_one("#builder_name_input", Input)
         self.query_one("#ms_content_switcher").current = "process_builder"
-        self.query_one("#or_content_switcher").current = "pb_mode_cont"
+        self.query_one("#or_content_switcher").current = "or_cont"
         self.query_one("#builder_content_switcher", ContentSwitcher).current = "builder_editor"
         self.builder_mode = mode
         self.builder_shift_armed = False
@@ -564,14 +597,23 @@ class MainScreen(Screen):
             return
 
         builder_tree = self.query_one("#builder_tree", Tree)
-        output_lines = [self._to_prcss_line(str(builder_tree.root.label), is_child=False)]
-
-        for top_level_node in builder_tree.root.children:
-            output_lines.append(self._to_prcss_line(str(top_level_node.label), is_child=False))
-            for child_node in top_level_node.children:
-                output_lines.append(self._to_prcss_line(str(child_node.label), is_child=True))
 
         save_dir, file_name = self._get_builder_save_target()
+        notes_map = read_all_notes(save_dir, file_name)
+
+        def _make_line(label: str, is_child: bool) -> str:
+            base = self._to_prcss_line(label, is_child).rstrip("\n")
+            clean_label, _ = self._strip_complete_prefix(label)
+            note = notes_map.get(clean_label.strip(), "")
+            return f"{base}|[n={note}]\n" if note else f"{base}\n"
+
+        output_lines = [_make_line(str(builder_tree.root.label), is_child=False)]
+
+        for top_level_node in builder_tree.root.children:
+            output_lines.append(_make_line(str(top_level_node.label), is_child=False))
+            for child_node in top_level_node.children:
+                output_lines.append(_make_line(str(child_node.label), is_child=True))
+
         save_dir.mkdir(parents=True, exist_ok=True)
         with open(save_dir / file_name, "w") as f:
             f.writelines(output_lines)
@@ -580,13 +622,10 @@ class MainScreen(Screen):
         self.notify(f"Saved: {save_dir / file_name}")
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
-        if event.tabs.id == "builder_mode_tab":
-            return
-
         if event.tabs.id == "builder_process_tags":
             return
 
-        if event.tabs.id == "log_mode_tabs":
+        if event.tabs.id != "or_tab":
             return
 
         tab = self.query_one("#or_tab")
@@ -599,9 +638,13 @@ class MainScreen(Screen):
         except IndexError:
             resume_tab.label = "RESUME \\[NONE]"
 
-        if "open" in tab.active or "resume" in tab.active or "processbuilder" in tab.active:
+        active_id = event.tab.id if event.tab else None
+        self.query_one("#pb_mode_select", Select).display = (active_id == "processbuilder")
+        self.query_one("#log_mode_select", Select).display = (active_id == "log")
+
+        if active_id in ("open", "resume", "processbuilder"):
             if self.query_one("#ms_content_switcher").current == "process_builder":
-                self.query_one("#ms_content_switcher").current = ""
+                self.query_one("#ms_content_switcher").current = "home_panel"
 
         
 
@@ -639,14 +682,13 @@ class MainScreen(Screen):
             return
 
         tab = self.query_one("#or_tab")
-        builder_mode_tab = self.query_one("#builder_mode_tab", Tabs)
 
         # Main tab actions execute only when that top-level tab is focused + Enter is pressed.
         if tab.has_focus and "open" in tab.active:
             self.tab_selected = "open"
             tab.active = ""
-            tree = self.query_one("#file_tree")
-            self.query_one("#or_content_switcher").current = "file_and_select"
+            tree = self.query_one("#open_file_tree")
+            self.query_one("#or_content_switcher").current = "open_browse_cont"
             tree.focus()
             tree.root.expand()
             tree.move_cursor(tree.root)
@@ -656,53 +698,19 @@ class MainScreen(Screen):
         if tab.has_focus and "resume" in tab.active:
             self.tab_selected = "resume"
             tab.active = ""
-            select = self.query_one("#process_select")
-            self.on_select_changed(Select.Changed(self, value=select.value))
+            self._resume_active_process()
             event.stop()
             return
 
         if tab.has_focus and "processbuilder" in tab.active:
-            self._show_process_builder_mode_select()
+            self.query_one("#pb_mode_select", Select).focus()
             event.stop()
             return
 
         if tab.has_focus and "log" in tab.active:
             self.tab_selected = "log"
-            tab.active = ""
-            self.query_one("#or_content_switcher").current = "log_mode_cont"
-            self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_tabs_pane"
-            self.query_one("#log_mode_tabs", Tabs).focus()
+            self.query_one("#log_mode_select", Select).focus()
             event.stop()
-            return
-
-        # Log mode sub-tab selection
-        log_mode_tabs = self.query_one("#log_mode_tabs", Tabs)
-        if log_mode_tabs.has_focus and event.key == "enter":
-            mode = log_mode_tabs.active
-            if mode == "log_dissolve_tab":
-                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_dissolve_pane"
-                tree = self.query_one("#dissolve_file_tree")
-                tree.focus()
-                tree.root.expand()
-                tree.move_cursor(tree.root)
-            elif mode == "log_read_tab":
-                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_read_pane"
-                tree = self.query_one("#read_log_file_tree")
-                tree.focus()
-                tree.root.expand()
-                tree.move_cursor(tree.root)
-            event.stop()
-            return
-
-        # Builder mode selection — tabs are now in the left panel (pb_mode_cont)
-        if self.query_one("#or_content_switcher").current == "pb_mode_cont" and builder_mode_tab.has_focus:
-            mode = builder_mode_tab.active
-            if mode:
-                if mode == "pb_new":
-                    self._show_builder_save_directory_picker()
-                else:
-                    self._open_process_builder_editor(mode)
-                event.stop()
             return
    
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
@@ -723,59 +731,21 @@ class MainScreen(Screen):
         self.log("Directory highlighted =", str(path))
         self.refresh_bindings()
 
-    def action_check_dir(self) -> None:
-        if self.tab_selected == "log":
-            log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
-            path = self.log_root
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        tree_id = event.node.tree.id
+        file_path = event.path
 
-            if log_pane == "log_dissolve_pane":
-                complete_files = [f.name for f in path.glob("*#COMPLETE.prcss")]
-                select = self.query_one("#dissolve_select", Select)
-                select_cont = self.query_one("#dissolve_select_cont")
-                file_cont = self.query_one("#dissolve_file_cont")
-                if complete_files:
-                    select_cont.styles.height = 4 + len(complete_files)
-                    file_cont.styles.height = "1fr"
-                    select.set_options([(f, f) for f in complete_files])
-                    select.focus()
-                else:
-                    select.set_options([])
-                    select.clear()
-                    self.notify("No completed processes found in this directory.")
-            elif log_pane == "log_read_pane":
-                log_files = [f.name for f in path.glob("*.prcsslog")]
-                select = self.query_one("#read_log_select", Select)
-                select_cont = self.query_one("#read_log_select_cont")
-                file_cont = self.query_one("#read_log_file_cont")
-                if log_files:
-                    select_cont.styles.height = 4 + len(log_files)
-                    file_cont.styles.height = "1fr"
-                    select.set_options([(f, f) for f in log_files])
-                    select.focus()
-                else:
-                    select.set_options([])
-                    select.clear()
-                    self.notify("No log files found in this directory.")
+        if tree_id == "open_file_tree":
+            self._load_process(file_path.parent, file_path.name)
             return
 
-        path = self.root
-        select = self.query_one("#process_select", Select)
-        self.log("SELECTED PROCESS =", select.value)
-        files = file_parser_selected(path)
-        if files:
-            nof = number_of_files(files)
-            options = [(x, x) for x in files]
-            select_cont = self.query_one("#select_cont")
-            file_cont = self.query_one("#file_cont")
-            select_cont.styles.height = 4 + nof
-            file_cont.styles.height = "1fr"
-            self.log("number of files = " + str(nof))
-            select.set_options(options)
-            select.focus()
-        else:
-            select.set_options([])
-            select.clear()
-            self.notify("No process files found in this directory.")
+        if tree_id == "dissolve_file_tree":
+            self._generate_log(file_path)
+            return
+
+        if tree_id == "read_log_file_tree":
+            self._display_prcsslog(file_path)
+            return
 
     def on_directory_tree_node_selected(self, event: DirectoryTree.NodeSelected) -> None:
         if self.query_one("#ms_content_switcher").current == "process_builder":
@@ -796,6 +766,13 @@ class MainScreen(Screen):
 
             
     def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "mode_select_up":
+            try:
+                pb = self.query_one("#pb_mode_select", Select)
+                log = self.query_one("#log_mode_select", Select)
+                return pb.has_focus or log.has_focus or pb.expanded or log.expanded
+            except Exception:
+                return False
         if action == "unfocus_input":
             try:
                 return (
@@ -843,17 +820,6 @@ class MainScreen(Screen):
                 return self.query_one("#ms_content_switcher").current == "process_cont"
             except Exception:
                 return False
-        if action == "check_dir":
-            try:
-                or_sw = self.query_one("#or_content_switcher").current
-                if or_sw == "file_and_select" and self.tab_selected in ("open", ""):
-                    return True
-                if self.tab_selected == "log":
-                    log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
-                    return log_pane in ("log_dissolve_pane", "log_read_pane")
-                return False
-            except Exception:
-                return False
         return True
 
     def action_back(self) -> None:
@@ -863,20 +829,22 @@ class MainScreen(Screen):
             return
         self.builder_shift_armed = False
 
-        # Back from log read view → go to log tabs
+        # Back from log read view → go to main tabs with LOG active
         if self.query_one("#ms_content_switcher", ContentSwitcher).current == "log_cont":
-            self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
+            self.query_one("#ms_content_switcher", ContentSwitcher).current = "home_panel"
             self.refresh_bindings()
-            self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_tabs_pane"
-            self.query_one("#log_mode_tabs", Tabs).focus()
+            self.query_one("#or_content_switcher").current = "or_cont"
+            self.query_one("#or_tab").active = "log"
+            self.query_one("#or_tab").focus()
             return
 
-        # Back from a log pane → go to log tabs
+        # Back from a log pane → go to main tabs with LOG active
         if self.query_one("#or_content_switcher").current == "log_mode_cont":
             log_switcher = self.query_one("#log_mode_switcher", ContentSwitcher)
             if log_switcher.current in ("log_dissolve_pane", "log_read_pane"):
-                log_switcher.current = "log_tabs_pane"
-                self.query_one("#log_mode_tabs", Tabs).focus()
+                self.query_one("#or_content_switcher").current = "or_cont"
+                self.query_one("#or_tab").active = "log"
+                self.query_one("#or_tab").focus()
                 return
 
         if self.query_one("#ms_content_switcher", ContentSwitcher).current == "process_builder":
@@ -885,25 +853,17 @@ class MainScreen(Screen):
                 self._show_process_builder_mode_select()
                 return
 
-        # Back from pb_mode_cont → go to main tabs
-        if self.query_one("#or_content_switcher").current == "pb_mode_cont":
-            self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
+        # Back from open browse
+        if self.query_one("#or_content_switcher").current == "open_browse_cont":
             self.query_one("#or_content_switcher").current = "or_cont"
             self.query_one("#or_tab").focus()
             return
 
-        self.query_one("#ms_content_switcher", ContentSwitcher).current = ""
+        self.query_one("#ms_content_switcher", ContentSwitcher).current = "home_panel"
         self.query_one("#or_content_switcher").current = "or_cont"
         self.query_one("#or_tab").focus()
         self.query_one("#or_tab").active = "open"
-        self.query_one("#file_tree").root.collapse_all()
-
-        select = self.query_one("#process_select", Select)
-        select_cont = self.query_one("#select_cont")
-        select.set_options([])
-        select.clear()
         self.query_one("#process_tree").reset(self.tree_name)
-        select_cont.styles.height = "7%"
 
 
     def action_toggle_tags(self) -> None:
@@ -1008,10 +968,58 @@ class MainScreen(Screen):
         else:
             subprocess_tab.remove_class("tag-staged")
 
+    def action_mode_select_up(self) -> None:
+        """Priority UP handler — only active when a mode select is focused/expanded."""
+        pb_select = self.query_one("#pb_mode_select", Select)
+        log_select = self.query_one("#log_mode_select", Select)
+        for sel in (pb_select, log_select):
+            if sel.has_focus:
+                # Closed dropdown focused → go back to tab
+                self.query_one("#or_tab").focus()
+                return
+            if sel.expanded:
+                try:
+                    overlay = sel.query_one(SelectOverlay)
+                    if overlay.has_focus:
+                        if overlay.highlighted is None or overlay.highlighted == 0:
+                            # At the top → close dropdown and return to tab
+                            sel.expanded = False
+                            self.query_one("#or_tab").focus()
+                        else:
+                            # Move cursor up within the dropdown
+                            overlay.action_cursor_up()
+                        return
+                except Exception:
+                    self.query_one("#or_tab").focus()
+                    return
+
     def action_select_down(self) -> None:
         if self.builder_tags_open:
             return
         if self.note_open:
+            return
+        tab = self.query_one("#or_tab")
+        if tab.has_focus and "processbuilder" in tab.active:
+            sel = self.query_one("#pb_mode_select", Select)
+            sel.focus()
+            sel.expanded = True
+            def _jump_pb():
+                try:
+                    sel.query_one(SelectOverlay).highlighted = 0
+                except Exception:
+                    pass
+            self.call_after_refresh(lambda: self.call_after_refresh(_jump_pb))
+            return
+        if tab.has_focus and "log" in tab.active:
+            sel = self.query_one("#log_mode_select", Select)
+            sel.focus()
+            sel.expanded = True
+            def _jump_log():
+                try:
+                    sel.query_one(SelectOverlay).highlighted = 0
+                except Exception:
+                    pass
+            self.call_after_refresh(lambda: self.call_after_refresh(_jump_log))
             return
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
@@ -1032,6 +1040,11 @@ class MainScreen(Screen):
         if self.builder_tags_open:
             return
         if self.note_open:
+            return
+        pb_select = self.query_one("#pb_mode_select", Select)
+        log_select = self.query_one("#log_mode_select", Select)
+        if pb_select.has_focus or log_select.has_focus:
+            self.query_one("#or_tab").focus()
             return
         tree = self.query_one("#process_tree")
         if self.query_one("#ms_content_switcher").current == "process_cont":
@@ -1252,9 +1265,6 @@ class MainScreen(Screen):
         self.title = "WELCOME TO VERITRAK"
         self.sub_title = "Powered by Westbound Designs"
 
-        select_cont = self.query_one("#select_cont", Container)
-        select_cont.border_title = "SELECT PROCESSES"
-        
         process_cont = self.query_one("#process_cont", Container)
         process_cont.border_title = "PROCESS TREE"
         self.query_one("#note_input", Input).display = False
@@ -1271,14 +1281,12 @@ class MainScreen(Screen):
         self.query_one("#or_tab").focus()
         
     def on_screen_resume(self) -> None:
-        select = self.query_one("#process_select", Select)
-        select.clear()
+        pass
 
-    def _generate_log(self, file_name) -> None:
-        if file_name is Select.NULL or not file_name:
-            return
+    def _generate_log(self, file_path: Path) -> None:
+        path = file_path.parent
+        file_name = file_path.name
 
-        path = self.log_root
         try:
             data = file_reader(path, file_name)
         except OSError as e:
@@ -1385,11 +1393,10 @@ class MainScreen(Screen):
         else:
             self.notify(f"Warning: {file_name} not found to delete", severity="warning")
 
-        # Go back to log mode tabs
-        self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_tabs_pane"
-        self.query_one("#dissolve_select", Select).set_options([])
-        self.query_one("#dissolve_select", Select).clear()
-        self.query_one("#log_mode_tabs", Tabs).focus()
+        # Go back to main tabs with LOG active
+        self.query_one("#or_content_switcher").current = "or_cont"
+        self.query_one("#or_tab").active = "log"
+        self.query_one("#or_tab").focus()
         self.notify(f"Published! Archived to data/logs/{log_file_name}")
 
         # Clear the active process hint on the RESUME tab if it pointed to the dissolved file
@@ -1403,12 +1410,9 @@ class MainScreen(Screen):
         except (IndexError, FileNotFoundError, OSError):
             pass
 
-    def _display_prcsslog(self, file_name) -> None:
-        if file_name is Select.NULL or not file_name:
-            return
-        path = self.log_root
+    def _display_prcsslog(self, file_path: Path) -> None:
         try:
-            log_text = (path / file_name).read_text()
+            log_text = file_path.read_text()
         except OSError as e:
             self.notify(f"Could not read log: {e}", severity="error")
             return
@@ -1420,37 +1424,22 @@ class MainScreen(Screen):
         self.query_one("#ms_content_switcher").current = "log_cont"
         self.refresh_bindings()
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-
-        if event.select.id == "dissolve_select":
-            self._generate_log(event.value)
-            return
-
-        if event.select.id == "read_log_select":
-            self._display_prcsslog(event.value)
-            return
-
-        self.select_data = self.query_one("#process_select").value
-        tab = self.query_one("#or_tab")
-
+    def _load_process(self, path: Path, file_name: str) -> None:
+        """Populate the process tree from a .prcss file and show process_cont."""
         tree = self.query_one("#process_tree")
-        #Handles select changes when in process and back is pressed
-        if "resume" in self.tab_selected:
-            saved_f = read_root_and_file()
-            path = Path(saved_f[0].replace("\n",""))
-            self.log("root = ", saved_f[0].replace("\n",""), "file = ", saved_f[1])
-            data = file_reader(path, saved_f[1])
+        tree.reset(self.tree_name)
 
-        elif self.select_data is Select.NULL:         
+        try:
+            data = file_reader(path, file_name)
+        except OSError as e:
+            self.notify(f"Could not read file: {e}", severity="error")
             return
-        
-        else:
-            save_root(str(self.root),str(self.select_data))
-            data = file_reader(self.root, self.select_data)
-        #Sets the first line in .prcss file as the main node
-        tree.root.label = data[0]
 
-        self.log("DATA = ", data)
+        self.root = path
+        self.select_data = file_name
+        save_root(str(path), file_name)
+
+        tree.root.label = data[0]
 
         if "[S]" in tree.root.label:
             new_root_label = "[COMPLETE]    " + strip_date_tag(str(tree.root.label).replace("[S]|","").rstrip())
@@ -1460,41 +1449,30 @@ class MainScreen(Screen):
         else:
             tree.root.expand()
 
-        #Deletes the first line so all the other lines can be leaves                   
-        data.remove(data[0])                        
+        data.remove(data[0])
 
-        #Populates Tree from file
-        for x in (data): 
+        current_node = None
+        for x in data:
             if "[>]" in x:
                 if "[S]" in x:
-                    #Populates data that is COMPLETEful and is a child
                     current_node.allow_expand = True
                     node_buffer = Text("[COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[>]|","").replace("[S]|","").rstrip())))
                     node_buffer.stylize("green")
                     current_node.add_leaf(node_buffer)
-                    # current_node.label.stylize("green")
                 else:
-                    #Populates data that is not complete and is a child
                     current_node.allow_expand = True
                     current_node.add_leaf(strip_note_tag(strip_date_tag(x.replace("[>]|","").rstrip())))
                     current_node.expand_all()
-                
             else:
-                #Populates items with children
-                if "[S]" in x and has_child(data,x):
+                if "[S]" in x and has_child(data, x):
                     current_node = tree.root.add_leaf("[COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip())))
                     current_node.label.stylize("green")
-
-                #Populates items without children
-                elif "[S]" in x and not has_child(data,x):
+                elif "[S]" in x and not has_child(data, x):
                     current_node = tree.root.add_leaf("  [COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip())))
                     current_node.label.stylize("green")
-
                 else:
-                    current_node = tree.root.add(strip_note_tag(strip_date_tag(x.rstrip())),allow_expand=False)
-        
-        # Recompute completion display from actual children state to fix any
-        # inconsistent file state (e.g. root marked [S] but children aren't all complete)
+                    current_node = tree.root.add(strip_note_tag(strip_date_tag(x.rstrip())), allow_expand=False)
+
         succ_c_load = "[COMPLETE]    "
         for top_node in tree.root.children:
             if top_node.children:
@@ -1513,24 +1491,138 @@ class MainScreen(Screen):
             tree.root.label = root_clean
             tree.root.expand()
 
-        if "resume" in self.tab_selected:
-            self.query_one("#ms_content_switcher").current = "process_cont"
-        
-        elif(event.select.is_blank()):
-            return
-        
-        elif(event.select.id == "process_select"):
-            print("OPENED PROCESS_CONT")
-            self.query_one("#ms_content_switcher").current = "process_cont"
-        
+        self.query_one("#ms_content_switcher").current = "process_cont"
         self.call_after_refresh(self.query_one("#process_tree").focus)
-        
+
+    def _resume_active_process(self) -> None:
+        """Load and display the last saved active process."""
+        try:
+            saved_f = read_root_and_file()
+            path = Path(saved_f[0].replace("\n", ""))
+            file_name = saved_f[1].strip()
+            if not file_name:
+                self.notify("No active process to resume.", severity="warning")
+                return
+        except (IndexError, FileNotFoundError, OSError):
+            self.notify("No active process to resume.", severity="warning")
+            return
+        self._load_process(path, file_name)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+
+        if event.select.id == "pb_mode_select":
+            if event.value is Select.BLANK:
+                return
+            mode = event.value
+            self.query_one("#pb_mode_select", Select).clear()
+            if mode == "pb_new":
+                self._show_builder_save_directory_picker()
+            elif mode == "pb_edit":
+                self._open_process_builder_editor("pb_edit")
+            return
+
+        if event.select.id == "log_mode_select":
+            if event.value is Select.BLANK:
+                return
+            mode = event.value
+            self.tab_selected = "log"
+            self.query_one("#log_mode_select", Select).clear()
+            self.query_one("#or_content_switcher").current = "log_mode_cont"
+            if mode == "log_dissolve":
+                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_dissolve_pane"
+                tree = self.query_one("#dissolve_file_tree")
+                tree.focus()
+                tree.root.expand()
+                tree.move_cursor(tree.root)
+                self.call_after_refresh(self._expand_dissolve_tree_to_active)
+            elif mode == "log_read":
+                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_read_pane"
+                tree = self.query_one("#read_log_file_tree")
+                tree.focus()
+                tree.root.expand()
+                tree.move_cursor(tree.root)
+            return
+
+        if event.select.id == "dissolve_select":
+            return
+
+    def _expand_dissolve_tree_to_active(self) -> None:
+        """Expand the dissolve file tree and move cursor to the active process file."""
+        try:
+            saved_f = read_root_and_file()
+            target_dir = Path(saved_f[0].replace("\n", ""))
+            target_file = saved_f[1].strip()
+            if not target_file:
+                return
+            target_path = target_dir / target_file
+        except (IndexError, OSError):
+            return
+
+        tree = self.query_one("#dissolve_file_tree")
+        tree_root_path = Path.home()
+
+        try:
+            rel_parts = list(target_dir.relative_to(tree_root_path).parts)
+        except ValueError:
+            return  # Active process not under home directory
+
+        def _navigate(node, remaining_parts):
+            if not remaining_parts:
+                # Look for the file node among the current node's children
+                for child in node.children:
+                    try:
+                        if child.data.path == target_path:
+                            tree.move_cursor(child)
+                            return
+                    except AttributeError:
+                        pass
+                # File node not visible (not #COMPLETE), settle on the directory
+                tree.move_cursor(node)
+                return
+
+            next_name = remaining_parts[0]
+            for child in node.children:
+                try:
+                    if child.data.path.name == next_name:
+                        child.expand()
+                        self.call_after_refresh(
+                            lambda c=child, r=remaining_parts[1:]: _navigate(c, r)
+                        )
+                        return
+                except AttributeError:
+                    pass
+            # Directory not found in tree (maybe not loaded yet), stay on current node
+            tree.move_cursor(node)
+
+        _navigate(tree.root, rel_parts)
+
 class DirOnlyTree(DirectoryTree):
     def on_show(self) -> None:
         self.root.expand()
 
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        return [p for p in paths if p.is_dir()] 
+        return [p for p in paths if p.is_dir()]
+
+class ProcessFileTree(DirectoryTree):
+    def on_show(self) -> None:
+        self.root.expand()
+
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if p.is_dir() or p.suffix == ".prcss"]
+
+class CompleteProcessFileTree(DirectoryTree):
+    def on_show(self) -> None:
+        self.root.expand()
+
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if p.is_dir() or ("#COMPLETE" in p.name and p.suffix == ".prcss")]
+
+class LogFileTree(DirectoryTree):
+    def on_show(self) -> None:
+        self.root.expand()
+
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [p for p in paths if p.is_dir() or p.suffix == ".prcsslog"]
     
 class veritrakk(App):
 
