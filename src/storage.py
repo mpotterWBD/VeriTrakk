@@ -2,6 +2,7 @@ from asyncio.windows_events import NULL
 from pathlib import Path
 from tkinter.tix import Select
 from datetime import datetime
+import re
 
 working_dir = Path.cwd()
 data_dir = working_dir / 'data'
@@ -59,10 +60,7 @@ def number_of_files(files):
 
 def strip_date_tag(s: str) -> str:
     """Remove |[d=...] completion timestamp from a line string."""
-    idx = s.find('|[d=')
-    if idx != -1:
-        return s[:idx]
-    return s
+    return re.sub(r'\|\[d=[^\]]*\]', '', s)
 
 def strip_note_tag(s: str) -> str:
     """Remove |[n=...] note from a line string."""
@@ -99,6 +97,29 @@ def get_note_for_label(label: str, path, file_name: str) -> str:
         if clean == label:
             return get_note_from_line(stripped)
     return ""
+
+def read_all_notes(path, file_name) -> dict:
+    """Return a dict mapping clean label -> note for all lines in the file that have notes."""
+    notes = {}
+    try:
+        with open(path / file_name, 'r') as f:
+            data = f.readlines()
+    except OSError:
+        return notes
+    for line in data:
+        stripped = line.strip()
+        note = get_note_from_line(stripped)
+        if not note:
+            continue
+        stripped_no_date = strip_date_tag(stripped)
+        stripped_no_note = strip_note_tag(stripped_no_date)
+        if "[>]" in stripped_no_note:
+            clean = stripped_no_note.replace("[S]|", "").replace("[>]|", "").strip()
+        else:
+            clean = stripped_no_note.replace("[S]|", "").strip()
+        if clean:
+            notes[clean] = note
+    return notes
 
 def set_note(label: str, note: str, path, file_name: str) -> None:
     """Set or clear the note for the given label in the .prcss file."""

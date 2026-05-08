@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note, read_all_notes
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -223,7 +223,7 @@ class MainScreen(Screen):
         self.query_one("#or_content_switcher").current = "or_cont"
         self.query_one("#ms_content_switcher").current = "home_panel"
         self.query_one("#or_tab").active = "processbuilder"
-        self.call_after_refresh(lambda: self.query_one("#pb_mode_select", Select).focus())
+        self.call_after_refresh(lambda: self.query_one("#or_tab").focus())
 
     def _show_builder_save_directory_picker(self) -> None:
         self.query_one("#or_content_switcher").current = "file_and_select"
@@ -285,7 +285,7 @@ class MainScreen(Screen):
 
             root_raw = str(data[0]).strip()
             root_is_complete = "[S]|" in root_raw
-            root_label = strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip())
+            root_label = strip_note_tag(strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip()))
             root_display = f"[COMPLETE]    {root_label}" if root_is_complete else root_label
             builder_tree.reset(root_display)
             builder_tree.root.expand()
@@ -298,7 +298,7 @@ class MainScreen(Screen):
 
                 is_complete = "[S]|" in raw_line
                 is_child = "[>]|" in raw_line
-                label = strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip())
+                label = strip_note_tag(strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip()))
                 if not label:
                     continue
 
@@ -597,14 +597,23 @@ class MainScreen(Screen):
             return
 
         builder_tree = self.query_one("#builder_tree", Tree)
-        output_lines = [self._to_prcss_line(str(builder_tree.root.label), is_child=False)]
-
-        for top_level_node in builder_tree.root.children:
-            output_lines.append(self._to_prcss_line(str(top_level_node.label), is_child=False))
-            for child_node in top_level_node.children:
-                output_lines.append(self._to_prcss_line(str(child_node.label), is_child=True))
 
         save_dir, file_name = self._get_builder_save_target()
+        notes_map = read_all_notes(save_dir, file_name)
+
+        def _make_line(label: str, is_child: bool) -> str:
+            base = self._to_prcss_line(label, is_child).rstrip("\n")
+            clean_label, _ = self._strip_complete_prefix(label)
+            note = notes_map.get(clean_label.strip(), "")
+            return f"{base}|[n={note}]\n" if note else f"{base}\n"
+
+        output_lines = [_make_line(str(builder_tree.root.label), is_child=False)]
+
+        for top_level_node in builder_tree.root.children:
+            output_lines.append(_make_line(str(top_level_node.label), is_child=False))
+            for child_node in top_level_node.children:
+                output_lines.append(_make_line(str(child_node.label), is_child=True))
+
         save_dir.mkdir(parents=True, exist_ok=True)
         with open(save_dir / file_name, "w") as f:
             f.writelines(output_lines)
@@ -1551,7 +1560,7 @@ class ProcessFileTree(DirectoryTree):
         self.root.expand()
 
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        return [p for p in paths if p.is_dir() or (p.suffix == ".prcss" and "#COMPLETE" not in p.name)]
+        return [p for p in paths if p.is_dir() or p.suffix == ".prcss"]
 
 class CompleteProcessFileTree(DirectoryTree):
     def on_show(self) -> None:
