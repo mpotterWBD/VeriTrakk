@@ -155,7 +155,7 @@ Header {
 
 #builder_tags_cont {
     width: 100%;
-    height: 10;
+    height: auto;
     border: double darkseagreen;
     margin: 0 0 1 0;
     padding: 1 1;
@@ -195,6 +195,42 @@ Header {
     text-style: italic;
 }
 
+#threshold_inputs_cont {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    display: none;
+}
+
+#threshold_upper_input {
+    width: 100%;
+    margin-bottom: 1;
+    border-top: solid darkseagreen;
+    border-bottom: solid darkseagreen;
+    border-left: none;
+    border-right: none;
+    color: darkkhaki;
+}
+
+#threshold_upper_input:focus {
+    border-top: solid goldenrod;
+    border-bottom: solid goldenrod;
+}
+
+#threshold_lower_input {
+    width: 100%;
+    border-top: solid darkseagreen;
+    border-bottom: solid darkseagreen;
+    border-left: none;
+    border-right: none;
+    color: darkkhaki;
+}
+
+#threshold_lower_input:focus {
+    border-top: solid goldenrod;
+    border-bottom: solid goldenrod;
+}
+
 #builder_tree {
     height: 1fr;
 }
@@ -225,6 +261,24 @@ Header {
 #note_input:focus {
     border-top: solid goldenrod;
     border-bottom: solid goldenrod;
+}
+
+#threshold_value_input {
+    width: 100%;
+    height: 3;
+    display: none;
+    border-top: solid cadetblue;
+    border-bottom: solid cadetblue;
+    border-left: none;
+    border-right: none;
+    margin: 0;
+    padding: 0 1;
+    color: cadetblue;
+}
+
+#threshold_value_input:focus {
+    border-top: solid lightblue;
+    border-bottom: solid lightblue;
 }
 
 Tree .tree--cursor {
