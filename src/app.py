@@ -595,8 +595,6 @@ class MainScreen(Screen):
         return save_dir, file_name
 
     def action_save_builder_process(self) -> None:
-        if isinstance(self.focused, Input):
-            return
         if self.builder_tags_open:
             return
         if self.query_one("#ms_content_switcher").current != "process_builder":
@@ -847,6 +845,14 @@ class MainScreen(Screen):
 
         if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
             return
+
+        # If the tags dialog is open (e.g. threshold inputs focused), close it cleanly
+        # before navigating away so builder_tags_open doesn't stay True and lock all input.
+        if self.builder_tags_open:
+            self.builder_tags_open = False
+            self.builder_staged_tags = set()
+            self.query_one("#threshold_inputs_cont", Container).display = False
+            self.query_one("#builder_tags_cont", Container).display = False
 
         self._show_process_builder_mode_select()
 
@@ -1339,9 +1345,9 @@ class MainScreen(Screen):
             succ_nc = "  [COMPLETE]    "
             result_color = "green" if result == "PASS" else "red"
             if node.parent and node.parent.parent:
-                new_label = Text(f"[COMPLETE][{result}]    {self._threshold_node_label}")
+                new_label = Text(f"[COMPLETE]    {self._threshold_node_label}    [{result}]")
             else:
-                new_label = Text(f"  [COMPLETE][{result}]    {self._threshold_node_label}")
+                new_label = Text(f"  [COMPLETE]    {self._threshold_node_label}    [{result}]")
             new_label.stylize(result_color)
             node.set_label(new_label)
 
@@ -1489,11 +1495,12 @@ class MainScreen(Screen):
             path = self.root
             file = str(self.select_data)
 
-        # Handle threshold PASS/FAIL nodes — strip [COMPLETE][PASS/FAIL] prefix and restore
+        # Handle threshold PASS/FAIL nodes — strip [COMPLETE] prefix and [PASS/FAIL] suffix and restore
         node_buff_str = str(node_buff)
         if ("[PASS]" in node_buff_str or "[FAIL]" in node_buff_str) and len(node.children) == 0:
             clean_label = node_buff_str
-            clean_label = re.sub(r'^\s*\[COMPLETE\]\[(?:PASS|FAIL)\]\s*', '', clean_label).strip()
+            clean_label = re.sub(r'^\s*\[COMPLETE\]\s*', '', clean_label)
+            clean_label = re.sub(r'\s*\[(?:PASS|FAIL)\]\s*$', '', clean_label).strip()
             remove_pass_fail(clean_label, path, file)
             node.set_label(clean_label)
 
@@ -1779,12 +1786,14 @@ class MainScreen(Screen):
             result = pf_match.group(1) if pf_match else None
             clean = re.sub(r'\[PASS\]|\[FAIL\]', '', strip_threshold_tags(strip_note_tag(strip_date_tag(raw.replace("[>]|","").replace("[S]|","").rstrip())))).strip()
             if result:
-                prefix = "[COMPLETE][{}]    ".format(result)
+                prefix = "[COMPLETE]    " if not child else "  [COMPLETE]    "
                 color = "green" if result == "PASS" else "red"
+                label_str = "{}{}    [{}]".format(prefix, clean, result)
             else:
                 prefix = ("[COMPLETE]    " if not child else "  [COMPLETE]    ")
                 color = "green"
-            t = Text(prefix + clean)
+                label_str = prefix + clean
+            t = Text(label_str)
             t.stylize(color)
             return t
 
