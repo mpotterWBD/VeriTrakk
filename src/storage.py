@@ -226,3 +226,101 @@ def remove_S(label, path, file_name):
     # Write back to file
     with open(path / file_name, 'w') as f:
         f.writelines(modified_data)
+
+# ---------------------------------------------------------------------------
+# Threshold tag helpers
+# ---------------------------------------------------------------------------
+
+def get_threshold_from_line(s: str) -> tuple[str, str]:
+    """Return (upper, lower) threshold strings from a raw line, or ('', '') if absent."""
+    ut = ""
+    lt = ""
+    m = re.search(r'\[UT=([^\]]*)\]', s)
+    if m:
+        ut = m.group(1)
+    m = re.search(r'\[LT=([^\]]*)\]', s)
+    if m:
+        lt = m.group(1)
+    return ut, lt
+
+def strip_threshold_tags(s: str) -> str:
+    """Remove [UT=...] and [LT=...] tags from a string."""
+    s = re.sub(r'\[UT=[^\]]*\]', '', s)
+    s = re.sub(r'\[LT=[^\]]*\]', '', s)
+    return s
+
+def read_all_thresholds(path, file_name) -> dict:
+    """Return a dict mapping clean label -> (upper, lower) for lines with threshold tags."""
+    thresholds = {}
+    try:
+        with open(path / file_name, 'r') as f:
+            data = f.readlines()
+    except OSError:
+        return thresholds
+    for line in data:
+        stripped = line.strip()
+        ut, lt = get_threshold_from_line(stripped)
+        if not ut and not lt:
+            continue
+        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
+        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
+        if clean:
+            thresholds[clean] = (ut, lt)
+    return thresholds
+
+def get_threshold_for_label(label: str, path, file_name: str) -> tuple[str, str]:
+    """Return (upper, lower) threshold for a given label, or ('', '') if none."""
+    try:
+        with open(path / file_name, 'r') as f:
+            data = f.readlines()
+    except OSError:
+        return "", ""
+    for line in data:
+        stripped = line.strip()
+        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
+        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
+        if clean == label:
+            return get_threshold_from_line(stripped)
+    return "", ""
+
+def set_pass_fail(label: str, result: str, path, file_name: str) -> None:
+    """Write [PASS] or [FAIL] result tag and [S] completion onto the matching line."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    with open(path / file_name, 'r') as f:
+        data = f.readlines()
+    modified_data = []
+    for line in data:
+        stripped = line.strip()
+        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
+        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
+        if clean == label:
+            base = line.rstrip()
+            base = re.sub(r'^\[S\]\|', '', base)
+            base = re.sub(r'\|\[d=[^\]]*\]', '', base)
+            base = re.sub(r'\[PASS\]|\[FAIL\]', '', base)
+            base = base.strip()
+            modified_data.append(f"[S]|{base}[{result}]|[d={timestamp}]\n")
+        else:
+            modified_data.append(line)
+    with open(path / file_name, 'w') as f:
+        f.writelines(modified_data)
+
+def remove_pass_fail(label: str, path, file_name: str) -> None:
+    """Remove [S], [PASS]/[FAIL], and date tag from the matching threshold line, restoring it."""
+    with open(path / file_name, 'r') as f:
+        data = f.readlines()
+    modified_data = []
+    for line in data:
+        stripped = line.strip()
+        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
+        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
+        if clean == label:
+            base = line.rstrip()
+            base = re.sub(r'^\[S\]\|', '', base)
+            base = re.sub(r'\|\[d=[^\]]*\]', '', base)
+            base = re.sub(r'\[PASS\]|\[FAIL\]', '', base)
+            modified_data.append(f"{base.strip()}\n")
+        else:
+            modified_data.append(line)
+    with open(path / file_name, 'w') as f:
+        f.writelines(modified_data)

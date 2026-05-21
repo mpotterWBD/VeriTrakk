@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 from rich.text import Text
 from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note, read_all_notes
+from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note, read_all_notes, read_all_thresholds, get_threshold_for_label, get_threshold_from_line, strip_threshold_tags, set_pass_fail, remove_pass_fail
 
 FILES = []
 NOF = number_of_files(FILES)
@@ -188,9 +188,12 @@ class MainScreen(Screen):
                                 with Container(id="builder_tags_cont"):
                                     yield Tabs(
                                         Tab("SUB PROCESS", id="tag_subprocess"),
-                                        Tab("+ ADD TAG", id="tag_placeholder"),
+                                        Tab("THRESHOLD", id="tag_threshold"),
                                         id="builder_process_tags",
                                     )
+                                    with Container(id="threshold_inputs_cont"):
+                                        yield Input(placeholder="Upper Threshold", id="threshold_upper_input")
+                                        yield Input(placeholder="Lower Threshold", id="threshold_lower_input")
                                 builder_tree: Tree[str] = Tree("NEW PROCESS", id="builder_tree")
                                 builder_tree.root.expand()
                                 builder_tree.guide_depth = 5
@@ -201,6 +204,7 @@ class MainScreen(Screen):
                     with Container(id="process_cont"):
                         self.tree_name = ""
                         yield Input(placeholder="Add a note...", id="note_input")
+                        yield Input(placeholder="Enter threshold value...", id="threshold_value_input")
                         prc_tree: Tree[str] = Tree("Process_Tree", id="process_tree")
                         prc_tree.root.expand()
                         prc_tree.guide_depth = 5
@@ -235,6 +239,8 @@ class MainScreen(Screen):
         file_tree.move_cursor(file_tree.root)
 
     def action_select_builder_directory(self) -> None:
+        if isinstance(self.focused, Input):
+            return
         if self.query_one("#ms_content_switcher").current != "process_builder":
             return
         if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_save_dir_select":
@@ -285,7 +291,7 @@ class MainScreen(Screen):
 
             root_raw = str(data[0]).strip()
             root_is_complete = "[S]|" in root_raw
-            root_label = strip_note_tag(strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip()))
+            root_label = strip_threshold_tags(strip_note_tag(strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip())))
             root_display = f"[COMPLETE]    {root_label}" if root_is_complete else root_label
             builder_tree.reset(root_display)
             builder_tree.root.expand()
@@ -298,7 +304,7 @@ class MainScreen(Screen):
 
                 is_complete = "[S]|" in raw_line
                 is_child = "[>]|" in raw_line
-                label = strip_note_tag(strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip()))
+                label = strip_threshold_tags(strip_note_tag(strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip())))
                 if not label:
                     continue
 
@@ -600,11 +606,19 @@ class MainScreen(Screen):
 
         save_dir, file_name = self._get_builder_save_target()
         notes_map = read_all_notes(save_dir, file_name)
+        thresholds_map = read_all_thresholds(save_dir, file_name)
+        # Merge in-memory pending thresholds (covers new processes not yet saved)
+        thresholds_map.update(self._pending_thresholds)
 
         def _make_line(label: str, is_child: bool) -> str:
             base = self._to_prcss_line(label, is_child).rstrip("\n")
             clean_label, _ = self._strip_complete_prefix(label)
-            note = notes_map.get(clean_label.strip(), "")
+            clean_label = clean_label.strip()
+            ut, lt = thresholds_map.get(clean_label, ("", ""))
+            if ut or lt:
+                tag_str = (f"[UT={ut}]" if ut else "") + (f"[LT={lt}]" if lt else "")
+                base = f"{base}{tag_str}"
+            note = notes_map.get(clean_label, "")
             return f"{base}|[n={note}]\n" if note else f"{base}\n"
 
         output_lines = [_make_line(str(builder_tree.root.label), is_child=False)]
@@ -619,6 +633,7 @@ class MainScreen(Screen):
             f.writelines(output_lines)
 
         save_root(str(save_dir), file_name)
+        self._pending_thresholds.clear()
         self.notify(f"Saved: {save_dir / file_name}")
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
@@ -654,8 +669,57 @@ class MainScreen(Screen):
         if self.builder_tags_open:
             if event.key == "ctrl+t":
                 return  # let the binding system handle it
+
+            upper_input = self.query_one("#threshold_upper_input", Input)
+            lower_input = self.query_one("#threshold_lower_input", Input)
+            tabs = self.query_one("#builder_process_tags", Tabs)
+            threshold_visible = self.query_one("#threshold_inputs_cont", Container).display
+
+            # Use self.focused (App-level, always in sync) instead of widget.has_focus
+            # which can lag by one frame after a programmatic focus() call.
+            focused_widget = self.focused
+            upper_focused = focused_widget is upper_input
+            lower_focused = focused_widget is lower_input
+            threshold_input_focused = upper_focused or lower_focused
+
+            # Up/down navigation between tabs and threshold inputs
+            if event.key == "down":
+                if threshold_visible and not threshold_input_focused and "tag_threshold" in self.builder_staged_tags:
+                    upper_input.focus()
+                    upper_input.cursor_position = len(upper_input.value)
+                    event.stop()
+                    return
+                if upper_focused:
+                    lower_input.focus()
+                    lower_input.cursor_position = len(lower_input.value)
+                    event.stop()
+                    return
+                event.stop()
+                return
+
+            if event.key == "up":
+                if lower_focused:
+                    upper_input.focus()
+                    upper_input.cursor_position = len(upper_input.value)
+                    event.stop()
+                    return
+                if upper_focused:
+                    tabs.focus()
+                    event.stop()
+                    return
+                event.stop()
+                return
+
+            # If a threshold input is focused, let it handle typing/backspace/etc.
+            if threshold_input_focused:
+                if event.key in ("left", "right"):
+                    # Let the input handle cursor movement, don't tab-navigate
+                    return
+                # All other keys (characters, backspace, delete, home, end) pass through
+                return
+
+            # Tab navigation with left/right when tabs are focused
             if event.key in ("left", "right"):
-                tabs = self.query_one("#builder_process_tags", Tabs)
                 tab_ids = [t.id for t in tabs.query(Tab)]
                 if tabs.active in tab_ids:
                     current_idx = tab_ids.index(tabs.active)
@@ -664,9 +728,11 @@ class MainScreen(Screen):
                     else:
                         new_idx = (current_idx - 1) % len(tab_ids)
                     tabs.active = tab_ids[new_idx]
-            elif event.key == "enter":
-                tabs = self.query_one("#builder_process_tags", Tabs)
-                if tabs.active == "tag_placeholder" or tabs.active is None:
+                event.stop()
+                return
+
+            if event.key == "enter":
+                if tabs.active is None:
                     event.stop()
                     return
                 active_id = tabs.active
@@ -675,6 +741,24 @@ class MainScreen(Screen):
                 else:
                     self.builder_staged_tags.add(active_id)
                 self._apply_staged_tag_visuals()
+                # Immediately apply subprocess when toggled — no need to wait for Ctrl+T close
+                if active_id == "tag_subprocess":
+                    is_subprocess = "tag_subprocess" in self.builder_staged_tags
+                    self._set_selected_builder_node_subprocess(is_subprocess)
+                event.stop()
+                return
+
+            event.stop()
+            return
+
+        # If threshold input is open, Escape cancels it
+        if self.threshold_open and event.key == "escape":
+            tree = self.query_one("#process_tree")
+            tree.focus()
+            tv_input = self.query_one("#threshold_value_input", Input)
+            tv_input.display = False
+            tv_input.value = ""
+            self.threshold_open = False
             event.stop()
             return
 
@@ -762,6 +846,14 @@ class MainScreen(Screen):
         if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
             return
 
+        # If the tags dialog is open (e.g. threshold inputs focused), close it cleanly
+        # before navigating away so builder_tags_open doesn't stay True and lock all input.
+        if self.builder_tags_open:
+            self.builder_tags_open = False
+            self.builder_staged_tags = set()
+            self.query_one("#threshold_inputs_cont", Container).display = False
+            self.query_one("#builder_tags_cont", Container).display = False
+
         self._show_process_builder_mode_select()
 
             
@@ -823,9 +915,13 @@ class MainScreen(Screen):
         return True
 
     def action_back(self) -> None:
+        if isinstance(self.focused, Input):
+            return
         if self.builder_tags_open:
             return
         if self.note_open:
+            return
+        if self.threshold_open:
             return
         self.builder_shift_armed = False
 
@@ -881,6 +977,17 @@ class MainScreen(Screen):
             if node and node is not builder_tree.root:
                 if node.parent is not builder_tree.root:
                     self.builder_staged_tags.add("tag_subprocess")
+                # Check if this node already has threshold tags saved
+                node_label_clean, _ = self._strip_complete_prefix(str(node.label))
+                save_dir, file_name = self._get_builder_save_target()
+                ut, lt = get_threshold_for_label(node_label_clean.strip(), save_dir, file_name)
+                if ut or lt:
+                    self.builder_staged_tags.add("tag_threshold")
+                    self.query_one("#threshold_upper_input", Input).value = ut
+                    self.query_one("#threshold_lower_input", Input).value = lt
+                else:
+                    self.query_one("#threshold_upper_input", Input).value = ""
+                    self.query_one("#threshold_lower_input", Input).value = ""
             tags_cont.display = True
             self._apply_staged_tag_visuals()
             self.query_one("#builder_process_tags", Tabs).focus()
@@ -888,7 +995,27 @@ class MainScreen(Screen):
             # Apply staged tags to the node
             is_subprocess = "tag_subprocess" in self.builder_staged_tags
             self._set_selected_builder_node_subprocess(is_subprocess)
+
+            # Save threshold tags if staged
+            if "tag_threshold" in self.builder_staged_tags:
+                builder_tree = self.query_one("#builder_tree", Tree)
+                node = builder_tree.cursor_node
+                if node and node is not builder_tree.root:
+                    node_label_clean, _ = self._strip_complete_prefix(str(node.label))
+                    ut = self.query_one("#threshold_upper_input", Input).value.strip()
+                    lt = self.query_one("#threshold_lower_input", Input).value.strip()
+                    clean_key = node_label_clean.strip()
+                    # Always buffer in memory so new (unsaved) files retain thresholds
+                    if ut or lt:
+                        self._pending_thresholds[clean_key] = (ut, lt)
+                    else:
+                        self._pending_thresholds.pop(clean_key, None)
+                    save_dir, file_name = self._get_builder_save_target()
+                    if save_dir.exists() and (save_dir / file_name).exists():
+                        self._write_threshold_to_file(clean_key, ut, lt, save_dir, file_name)
+
             self.builder_staged_tags = set()
+            self.query_one("#threshold_inputs_cont", Container).display = False
             tags_cont.display = False
             self.query_one("#builder_name_input", Input).focus()
 
@@ -967,6 +1094,42 @@ class MainScreen(Screen):
             subprocess_tab.add_class("tag-staged")
         else:
             subprocess_tab.remove_class("tag-staged")
+
+        threshold_tab = self.query_one("#tag_threshold", Tab)
+        threshold_active = "tag_threshold" in self.builder_staged_tags
+        if threshold_active:
+            threshold_tab.add_class("tag-staged")
+        else:
+            threshold_tab.remove_class("tag-staged")
+        self.query_one("#threshold_inputs_cont", Container).display = threshold_active
+
+    def _write_threshold_to_file(self, label: str, ut: str, lt: str, save_dir: Path, file_name: str) -> None:
+        """Write or clear [UT=...][LT=...] tags on the matching label line in the file."""
+        try:
+            with open(save_dir / file_name, 'r') as f:
+                data = f.readlines()
+        except OSError:
+            return
+        modified = []
+        for line in data:
+            stripped = line.strip()
+            stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
+            clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").strip()
+            if clean == label:
+                base = strip_threshold_tags(line.rstrip())
+                if ut or lt:
+                    tag_str = ""
+                    if ut:
+                        tag_str += f"[UT={ut}]"
+                    if lt:
+                        tag_str += f"[LT={lt}]"
+                    modified.append(f"{base}{tag_str}\n")
+                else:
+                    modified.append(f"{base}\n")
+            else:
+                modified.append(line)
+        with open(save_dir / file_name, 'w') as f:
+            f.writelines(modified)
 
     def action_mode_select_up(self) -> None:
         """Priority UP handler — only active when a mode select is focused/expanded."""
@@ -1112,6 +1275,117 @@ class MainScreen(Screen):
         builder_tree.set_class(event.value.strip() == "", "blank-focused")
         self._refresh_builder_blank_focus_visual(node)
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "builder_name_input":
+            return
+        if self.query_one("#ms_content_switcher").current != "process_builder":
+            return
+        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
+            return
+
+        builder_tree = self.query_one("#builder_tree", Tree)
+        node = builder_tree.cursor_node
+        if node is None:
+            return
+        node.set_label(event.value)
+        builder_tree.set_class(event.value.strip() == "", "blank-focused")
+        self._refresh_builder_blank_focus_visual(node)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "threshold_value_input":
+            return
+        if not self.threshold_open:
+            return
+
+        value_str = event.value.strip()
+        tree = self.query_one("#process_tree")
+        tree.focus()  # focus before hiding to prevent render glitch
+        tv_input = self.query_one("#threshold_value_input", Input)
+        tv_input.display = False
+        tv_input.value = ""
+        self.threshold_open = False
+
+        if not value_str:
+            return
+
+        try:
+            value = float(value_str)
+        except ValueError:
+            self.notify("Invalid number — threshold not recorded.", severity="warning")
+            self.query_one("#process_tree").focus()
+            return
+
+        saved_f = read_root_and_file()
+        if "resume" in self.tab_selected:
+            path = Path(saved_f[0].replace("\n", ""))
+            file = saved_f[1].strip()
+        else:
+            path = self.root
+            file = str(self.select_data)
+
+        ut_str, lt_str = get_threshold_for_label(self._threshold_node_label, path, file)
+        try:
+            ut = float(ut_str) if ut_str else None
+            lt = float(lt_str) if lt_str else None
+        except ValueError:
+            ut = lt = None
+
+        if (ut is None or value <= ut) and (lt is None or value >= lt):
+            result = "PASS"
+        else:
+            result = "FAIL"
+
+        set_pass_fail(self._threshold_node_label, result, path, file)
+
+        # Update tree node label
+        tree = self.query_one("#process_tree")
+        node = tree.cursor_node
+        if node is not None:
+            succ_c = "[COMPLETE]    "
+            succ_nc = "  [COMPLETE]    "
+            result_color = "green" if result == "PASS" else "red"
+            if node.parent and node.parent.parent:
+                new_label = Text(f"[COMPLETE]    {self._threshold_node_label}    [{result}]")
+            else:
+                new_label = Text(f"  [COMPLETE]    {self._threshold_node_label}    [{result}]")
+            new_label.stylize(result_color)
+            node.set_label(new_label)
+
+            # Auto-collapse parent when all children complete
+            if node.parent:
+                all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.children)
+                if all_complete:
+                    node.parent.collapse()
+                    parent_label = str(node.parent.label).replace(succ_c, "").strip()
+                    node.parent.set_label(Text(succ_c + parent_label, style="green"))
+                    set_S(str(parent_label), path, file)
+                    tree.move_cursor(node.parent)
+
+            if node.parent and node.parent.parent:
+                parents_all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.parent.children)
+                if parents_all_complete:
+                    node.parent.parent.collapse()
+                    ppl = str(node.parent.parent.label).replace(succ_c, "").strip()
+                    node.parent.parent.set_label(Text(succ_c + ppl, style="green"))
+                    set_S(str(ppl), path, file)
+
+            all_root_complete = (
+                len(tree.root.children) > 0
+                and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
+            )
+            if all_root_complete and "#COMPLETE" not in file:
+                new_file = file.replace(".prcss", "#COMPLETE.prcss")
+                try:
+                    (path / file).rename(path / new_file)
+                    save_root(str(path), new_file)
+                    self.select_data = new_file
+                    self.notify(f"Process complete! File renamed to {new_file}")
+                except OSError as e:
+                    self.notify(f"Could not rename file: {e}", severity="error")
+
+        self.notify(f"{result}: {value_str}")
+        tree.focus()
+
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         if self.query_one("#ms_content_switcher").current == "process_builder" and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor":
             self._sync_builder_input()
@@ -1122,6 +1396,8 @@ class MainScreen(Screen):
             return
         if self.query_one("#ms_content_switcher").current != "process_cont":
             return
+        if self.threshold_open:
+            return
 
         succ_c = "[COMPLETE]    "
         succ_nc = "  [COMPLETE]    "
@@ -1130,13 +1406,27 @@ class MainScreen(Screen):
         node_buff = node.label
 
         saved_f = read_root_and_file()
-        tab = self.query_one("#or_tab")
         if "resume" in self.tab_selected:
             path = Path(saved_f[0].replace("\n",""))
             file = saved_f[1]
         else:
             path = self.root
             file = str(self.select_data)
+
+        # If this leaf node has a threshold, open the value input instead of completing
+        if "[COMPLETE]" not in node_buff and len(node.children) == 0:
+            clean_label = str(node_buff).strip()
+            ut, lt = get_threshold_for_label(clean_label, path, file)
+            if ut != "" or lt != "":
+                self._threshold_node_label = clean_label
+                tv_input = self.query_one("#threshold_value_input", Input)
+                tv_input.value = ""
+                tv_input.display = True
+                parts = ([f"UT={ut}"] if ut != "" else []) + ([f"LT={lt}"] if lt != "" else [])
+                tv_input.placeholder = "  ".join(parts)
+                self.threshold_open = True
+                tv_input.focus()
+                return
 
         #Applies to nodes with out COMPLETE and nodes with no children
         if "[COMPLETE]" not in node_buff and len(node.children) == 0:
@@ -1198,13 +1488,49 @@ class MainScreen(Screen):
         node_buff = node.label
 
         saved_f = read_root_and_file()
-        tab = self.query_one("#or_tab")
         if "resume" in self.tab_selected:
             path = Path(saved_f[0].replace("\n",""))
             file = saved_f[1]
         else:
             path = self.root
             file = str(self.select_data)
+
+        # Handle threshold PASS/FAIL nodes — strip [COMPLETE] prefix and [PASS/FAIL] suffix and restore
+        node_buff_str = str(node_buff)
+        if ("[PASS]" in node_buff_str or "[FAIL]" in node_buff_str) and len(node.children) == 0:
+            clean_label = node_buff_str
+            clean_label = re.sub(r'^\s*\[COMPLETE\]\s*', '', clean_label)
+            clean_label = re.sub(r'\s*\[(?:PASS|FAIL)\]\s*$', '', clean_label).strip()
+            remove_pass_fail(clean_label, path, file)
+            node.set_label(clean_label)
+
+            # Also un-complete any parent nodes
+            if node.parent:
+                parent_label = str(node.parent.label).replace(succ_c, "").strip()
+                remove_S("[S]|" + parent_label, path, file)
+                node.parent.label = parent_label
+                node.parent.label.stylize("default")
+                node.parent.expand()
+
+            if node.parent and node.parent.parent:
+                ppl = str(node.parent.parent.label).replace(succ_c, "").strip()
+                remove_S("[S]|" + ppl, path, file)
+                node.parent.parent.label = ppl
+                node.parent.parent.label.stylize("default")
+                node.parent.parent.expand()
+
+            if "#COMPLETE" in file:
+                not_all_complete = any("[COMPLETE]" not in str(child.label) for child in tree.root.children)
+                if not_all_complete:
+                    old_file = file.replace("#COMPLETE.prcss", ".prcss")
+                    try:
+                        (path / file).rename(path / old_file)
+                        save_root(str(path), old_file)
+                        self.select_data = old_file
+                        self.notify(f"Process incomplete — file renamed back to {old_file}")
+                    except OSError as e:
+                        self.notify(f"Could not rename file: {e}", severity="error")
+            return
 
         #Applies to nodes with COMPLETE and nodes with no children
         if succ_c in node_buff and len(node.children) == 0:
@@ -1257,7 +1583,10 @@ class MainScreen(Screen):
         self.builder_updating_tags = False
         self.builder_tags_open = False
         self.builder_staged_tags: set[str] = set()
+        self._pending_thresholds: dict[str, tuple[str, str]] = {}
         self.note_open = False
+        self.threshold_open = False
+        self._threshold_node_label: str = ""
         self.root = Path.home()
         self.log_root = Path.home()
         self.select_data = Select.NULL
@@ -1268,6 +1597,7 @@ class MainScreen(Screen):
         process_cont = self.query_one("#process_cont", Container)
         process_cont.border_title = "PROCESS TREE"
         self.query_one("#note_input", Input).display = False
+        self.query_one("#threshold_value_input", Input).display = False
 
         process_builder = self.query_one("#process_builder")
         process_builder.border_title = "PROCESS BUILDER"
@@ -1275,8 +1605,7 @@ class MainScreen(Screen):
         tags_cont = self.query_one("#builder_tags_cont", Container)
         tags_cont.border_title = "PROCESS TAGS"
         tags_cont.display = False
-
-        # self.call_after_refresh(self.query_one("#file_tree").root.expand)
+        self.query_one("#threshold_inputs_cont", Container).display = False
 
         self.query_one("#or_tab").focus()
         
@@ -1451,34 +1780,52 @@ class MainScreen(Screen):
 
         data.remove(data[0])
 
+        def _make_complete_label(raw: str, child: bool) -> Text:
+            """Build a [COMPLETE] or [COMPLETE][PASS/FAIL] label Text from a raw [S] line."""
+            pf_match = re.search(r'\[(PASS|FAIL)\]', raw)
+            result = pf_match.group(1) if pf_match else None
+            clean = re.sub(r'\[PASS\]|\[FAIL\]', '', strip_threshold_tags(strip_note_tag(strip_date_tag(raw.replace("[>]|","").replace("[S]|","").rstrip())))).strip()
+            if result:
+                prefix = "[COMPLETE]    " if not child else "  [COMPLETE]    "
+                color = "green" if result == "PASS" else "red"
+                label_str = "{}{}    [{}]".format(prefix, clean, result)
+            else:
+                prefix = ("[COMPLETE]    " if not child else "  [COMPLETE]    ")
+                color = "green"
+                label_str = prefix + clean
+            t = Text(label_str)
+            t.stylize(color)
+            return t
+
         current_node = None
         for x in data:
             if "[>]" in x:
                 if "[S]" in x:
                     current_node.allow_expand = True
-                    node_buffer = Text("[COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[>]|","").replace("[S]|","").rstrip())))
-                    node_buffer.stylize("green")
-                    current_node.add_leaf(node_buffer)
+                    current_node.add_leaf(_make_complete_label(x, child=True))
                 else:
                     current_node.allow_expand = True
-                    current_node.add_leaf(strip_note_tag(strip_date_tag(x.replace("[>]|","").rstrip())))
+                    current_node.add_leaf(strip_threshold_tags(strip_note_tag(strip_date_tag(x.replace("[>]|","").rstrip()))))
                     current_node.expand_all()
             else:
                 if "[S]" in x and has_child(data, x):
-                    current_node = tree.root.add_leaf("[COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip())))
-                    current_node.label.stylize("green")
+                    current_node = tree.root.add_leaf(_make_complete_label(x, child=False))
                 elif "[S]" in x and not has_child(data, x):
-                    current_node = tree.root.add_leaf("  [COMPLETE]    " + strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip())))
-                    current_node.label.stylize("green")
+                    lbl = _make_complete_label(x, child=False)
+                    # top-level leaf without children gets extra indent if no PASS/FAIL
+                    if "[PASS]" not in x and "[FAIL]" not in x:
+                        lbl = Text("  [COMPLETE]    " + strip_threshold_tags(strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip()))))
+                        lbl.stylize("green")
+                    current_node = tree.root.add_leaf(lbl)
                 else:
-                    current_node = tree.root.add(strip_note_tag(strip_date_tag(x.rstrip())), allow_expand=False)
+                    current_node = tree.root.add(strip_threshold_tags(strip_note_tag(strip_date_tag(x.rstrip()))), allow_expand=False)
 
         succ_c_load = "[COMPLETE]    "
         for top_node in tree.root.children:
             if top_node.children:
                 all_sub_complete = all("[COMPLETE]" in str(child.label) for child in top_node.children)
                 if not all_sub_complete and "[COMPLETE]" in str(top_node.label):
-                    clean = str(top_node.label).replace(succ_c_load, "").strip()
+                    clean = re.sub(r'^\s*\[COMPLETE\](?:\[(?:PASS|FAIL)\])?\s*', '', str(top_node.label)).strip()
                     top_node.set_label(clean)
                     top_node.expand()
 
@@ -1487,7 +1834,7 @@ class MainScreen(Screen):
             and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
         )
         if not all_top_complete and "[COMPLETE]" in str(tree.root.label):
-            root_clean = str(tree.root.label).replace(succ_c_load, "").strip()
+            root_clean = re.sub(r'^\s*\[COMPLETE\](?:\[(?:PASS|FAIL)\])?\s*', '', str(tree.root.label)).strip()
             tree.root.label = root_clean
             tree.root.expand()
 
