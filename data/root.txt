@@ -1,6 +1,2 @@
 C:\Users\17195\Desktop\Westbound Designs\Quest Logs
-<<<<<<< HEAD
-Week 5_11_2026.prcss
-=======
 Week_5.18.prcss
->>>>>>> add_threshold_tag

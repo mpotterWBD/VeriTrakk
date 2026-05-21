@@ -1,404 +1,462 @@
+/* =========================================================
+   VeriTrakk  -  veritrakk.tcss
+   Full Upgrade  |  Westbound Designs
+   ========================================================= */
 
-#ms_content_switcher {
-    width: 1fr;
-    height: 1fr;
+/* ── Global ─────────────────────────────────────────────── */
+Screen {
+    background: #0d0d0d;
 }
 
-#home_panel {
-    width: 1fr;
-    height: 1fr;
-    border: double darkseagreen;
-    padding: 0 2;
-}
-
-#home_markdown {
-    width: 100%;
-    color: darkkhaki;
-    background: transparent;
-    scrollbar-size: 1 1;
-}
-
-#home_panel MarkdownH1 {
+Header {
+    background: #1a1a1a;
     color: lightsalmon;
     text-style: bold;
+    height: 1;
 }
 
-#home_panel MarkdownH2 {
-    color: darkseagreen;
+Footer {
+    background: #111;
+    color: #444;
+    height: 1;
+}
+
+/* ── Toolbar ────────────────────────────────────────────── */
+#toolbar {
+    height: auto;
+    padding: 0 1;
+    background: #111;
+    border-bottom: solid darkseagreen;
+    align: left middle;
+}
+
+.toolbar_btn {
+    margin: 0 1 0 0;
+    min-width: 10;
+    background: #1e1e1e;
+    border: none;
+    color: #666;
+}
+
+.toolbar_btn:hover {
+    background: #2a2a2a;
+    color: darkkhaki;
+}
+
+.toolbar_btn:focus {
+    background: #2a2a2a;
+    color: goldenrod;
+    border: none;
     text-style: bold;
 }
 
-#home_panel MarkdownH3 {
-    color: cadetblue;
+.toolbar_btn.active_mode {
+    color: lightsalmon;
+    text-style: bold;
+    background: #1e1010;
 }
 
-#home_panel MarkdownCode {
+#status_bar {
+    width: 1fr;
+    margin-left: 2;
+    color: darkkhaki;
+    content-align: right middle;
+}
+
+/* ── Main split ─────────────────────────────────────────── */
+#main {
+    height: 1fr;
+}
+
+/* ── Sidebar ────────────────────────────────────────────── */
+#sidebar {
+    width: 30%;
+    height: 1fr;
+    background: #0f0f0f;
+    border-right: solid darkseagreen;
+}
+
+/* home */
+#side_home {
+    padding: 2 1 1 1;
+    height: 1fr;
+    align: center top;
+}
+
+#logo {
+    color: lightsalmon;
+    text-style: bold;
+    text-align: center;
+    content-align: center top;
+    width: 100%;
+    padding-bottom: 1;
+}
+
+/* run */
+#side_run {
+    padding: 1;
+    height: 1fr;
+}
+
+#run_name {
+    padding-bottom: 1;
+}
+
+#run_progress {
+    padding-bottom: 1;
+}
+
+#run_step_info {
+    color: #888;
+    padding-top: 1;
+    border-top: solid #252525;
+    height: 1fr;
+}
+
+/* build */
+#side_build {
+    height: 1fr;
+}
+
+#side_build_title {
+    color: darkseagreen;
+    padding: 0 1;
+    height: auto;
+}
+
+#build_file_label {
+    height: auto;
+    padding: 0 1;
+    color: goldenrod;
+    border-top: solid #252525;
+}
+
+/* ── Content ────────────────────────────────────────────── */
+#content {
+    width: 1fr;
+    height: 1fr;
+    background: #0d0d0d;
+}
+
+/* home */
+#view_home {
+    padding: 1 3;
+}
+
+Markdown {
+    background: transparent;
+    color: darkkhaki;
+}
+
+MarkdownH1 {
+    color: lightsalmon;
+    text-style: bold;
+    background: transparent;
+}
+
+MarkdownH2 {
+    color: darkseagreen;
+    text-style: bold;
+    background: transparent;
+}
+
+MarkdownH3 {
+    color: cadetblue;
+    background: transparent;
+}
+
+MarkdownCode {
     color: goldenrod;
     background: transparent;
 }
 
-#file_cont {
-    border: double darkseagreen;
-    width: 100%;
-    height: 100%;
-}
-
-#file_cont:focus-within {
-    border: double goldenrod
-}
-
-#graphical_header{
-     height: auto;
-     padding: 0;
-     margin: 0;
-}
-
-Label {
-    border: darkkhaki;
-    width: 50%;
-    height: 2;
-}
-
-#left_panel{
-    width: 30%;
-    height: 100%;
-}
-
-Header {
-    background: darkkhaki;
-    height: 1;
-    text-style: bold;
-    color: black;
-}
-
-#figlet{
-    text_align: center;
-    content-align: center middle;
-    color: lightsalmon;
-    background: black;
-    border: none;
-}
-
-#main_panel{
-    height: 100%
-}
-
-#or_cont{
-    
-    height: auto;
-}
-
-#or_tab{
-    width: 100%;
-}
-
-#process_select{
+MarkdownFence {
+    background: #111;
     color: darkkhaki;
 }
 
-#process_select:focus {
-}
+/* open hint — removed (now a dialog) */
 
-#process_builder{
-    border: double darkseagreen;
-    width: 70%;
-}
-
-#builder_content_switcher {
-    height: 100%;
-}
-
-#builder_mode_select {
-    height: 4;
-}
-
-#pb_mode_cont {
-    width: 100%;
-    height: 4;
-}
-
-#builder_mode_tab {
-    width: 100%;
-}
-
-#builder_save_dir_select {
-    height: 100%;
-}
-
-#builder_save_dir_cont {
-    border: double darkseagreen;
-    width: 100%;
-    height: 100%;
-}
-
-#builder_save_dir_prompt {
-    border: double darkseagreen;
-    width: 100%;
-    height: 100%;
-    content-align: center middle;
-    text-align: center;
-    color: darkkhaki;
-}
-
-#process_builder_layout {
-    height: 100%;
-}
-
-#builder_editor {
-    height: 100%;
-}
-
-#builder_name_input {
-    width: 100%;
-    margin: 0 0 1 0;
-}
-
-#builder_tags_cont {
-    width: 100%;
-    height: auto;
-    border: double darkseagreen;
-    margin: 0 0 1 0;
-    padding: 1 1;
-    content-align: left top;
-    display: none;
-}
-
-#builder_process_tags {
-    height: 3;
-    background: transparent;
-    padding: 0;
-    margin: 0;
-}
-
-#builder_process_tags Tab {
-    background: transparent;
-    color: #555555;
-}
-
-#builder_process_tags Tab.-active {
-    background: transparent;
-    color: #555555;
-}
-
-#builder_process_tags Tab.tag-staged {
-    color: green;
-    text-style: bold;
-}
-
-#builder_process_tags Tab.tag-staged.-active {
-    color: green;
-    text-style: bold;
-}
-
-#builder_process_tags Tab#tag_placeholder {
-    color: #333333;
-    text-style: italic;
-}
-
-#threshold_inputs_cont {
-    width: 100%;
-    height: auto;
-    margin-top: 1;
-    display: none;
-}
-
-#threshold_upper_input {
-    width: 100%;
-    margin-bottom: 1;
-    border-top: solid darkseagreen;
-    border-bottom: solid darkseagreen;
-    border-left: none;
-    border-right: none;
-    color: darkkhaki;
-}
-
-#threshold_upper_input:focus {
-    border-top: solid goldenrod;
-    border-bottom: solid goldenrod;
-}
-
-#threshold_lower_input {
-    width: 100%;
-    border-top: solid darkseagreen;
-    border-bottom: solid darkseagreen;
-    border-left: none;
-    border-right: none;
-    color: darkkhaki;
-}
-
-#threshold_lower_input:focus {
-    border-top: solid goldenrod;
-    border-bottom: solid goldenrod;
-}
-
-#builder_tree {
+/* run */
+#view_run {
     height: 1fr;
-}
-
-#process_cont{
-    border: double darkseagreen;
-    width: 1fr;
     padding: 0;
 }
 
 #process_tree {
     height: 1fr;
-}
-
-#note_input {
-    width: 100%;
-    height: 3;
-    display: none;
-    border-top: solid darkkhaki;
-    border-bottom: solid darkkhaki;
-    border-left: none;
-    border-right: none;
-    margin: 0;
+    border: none;
     padding: 0 1;
-    color: darkkhaki;
-}
-
-#note_input:focus {
-    border-top: solid goldenrod;
-    border-bottom: solid goldenrod;
-}
-
-#threshold_value_input {
-    width: 100%;
-    height: 3;
-    display: none;
-    border-top: solid cadetblue;
-    border-bottom: solid cadetblue;
-    border-left: none;
-    border-right: none;
-    margin: 0;
-    padding: 0 1;
-    color: cadetblue;
-}
-
-#threshold_value_input:focus {
-    border-top: solid lightblue;
-    border-bottom: solid lightblue;
-}
-
-Tree .tree--cursor {
     background: transparent;
-    color: #0059ff;
 }
 
-#builder_tree.blank-focused .tree--cursor {
-    background: #004faa;
-    color: black;
-}
-
-#process_tree .tree--label{
-   
-}
-
-#process_tree .tree--guides{
-    color: #0059ff;
-}
-
-#select_cont {
-    border: double darkseagreen;
-    width: 100%;
-    height: 7%;
-}
-
-#or_content_switcher {
+/* build */
+#view_build {
     height: 1fr;
 }
 
-#open_browse_cont {
-    width: 100%;
-    height: 1fr;
+#build_toolbar {
+    height: auto;
+    padding: 0 1;
+    background: #111;
+    border-bottom: solid darkseagreen;
+    align: left middle;
 }
 
-#open_file_tree {
-    border: double darkseagreen;
-    width: 100%;
-    height: 1fr;
-}
-
-#open_file_tree:focus-within {
-    border: double goldenrod;
-}
-
-#tab_placeholder{
-    width: 100%;
-    height: 1;
-}
-
-#header_rule{
+#build_name_inp {
+    width: 1fr;
+    margin: 0 1 0 0;
+    background: transparent;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    border-bottom: solid darkseagreen;
+    color: lightsalmon;
     padding: 0;
-    margin: 0;
-    color: cadetblue
 }
 
-#compose_header{
-    background: darkkhaki;
-    height: 1;
-    text-style: bold;
+#build_name_inp:focus {
+    border-bottom: solid goldenrod;
+    color: goldenrod;
+    background: transparent;
 }
 
-#log_mode_cont {
-    width: 100%;
+.build_btn {
+    margin: 0 0 0 1;
+    min-width: 8;
+}
+
+#builder_tree {
     height: 1fr;
+    border: none;
+    padding: 0 1;
+    background: transparent;
 }
 
-#log_mode_switcher {
-    height: 100%;
-}
-
-#pb_mode_select {
-    display: none;
-    margin-left: 14;
-    color: darkkhaki;
-}
-
-#log_mode_select {
-    display: none;
-    margin-left: 31;
-    color: darkkhaki;
-}
-
-#log_dissolve_pane {
-    height: 100%;
-}
-
-#log_read_pane {
-    height: 100%;
-}
-
-#dissolve_file_tree {
-    border: double darkseagreen;
-    width: 100%;
-    height: 100%;
-}
-
-#dissolve_file_tree:focus-within {
-    border: double goldenrod;
-}
-
-#read_log_file_tree {
-    border: double darkseagreen;
-    width: 100%;
-    height: 100%;
-}
-
-#read_log_file_tree:focus-within {
-    border: double goldenrod;
-}
-
-#log_cont {
-    border: double darkseagreen;
-    width: 70%;
-    padding: 0;
+/* logs */
+#view_logs {
+    height: 1fr;
+    padding: 1;
 }
 
 #log_output {
-    width: 100%;
-    height: 100%;
+    height: 1fr;
     color: darkkhaki;
+    background: transparent;
+}
+
+/* ── Tree cursor / guides ───────────────────────────────── */
+Tree > .tree--cursor {
+    background: #12201c;
+    color: darkseagreen;
+}
+
+Tree > .tree--highlight {
+    background: transparent;
+}
+
+Tree > .tree--highlight-line {
+    background: transparent;
+}
+
+Tree > .tree--guides {
+    color: #2a2a2a;
+}
+
+Tree > .tree--guides-hover {
+    color: #444;
+}
+
+/* ── Modals ─────────────────────────────────────────────── */
+NoteScreen,
+ThresholdScreen,
+StepScreen,
+ConfirmScreen {
+    align: center middle;
+}
+
+#modal_box {
+    background: #181818;
+    border: double darkseagreen;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+    max-height: 90%;
+}
+
+#modal_title {
+    color: lightsalmon;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    padding-bottom: 1;
+}
+
+#thresh_step_label {
+    color: goldenrod;
+    padding-bottom: 0;
+}
+
+#thresh_bounds {
+    color: cadetblue;
+    padding-bottom: 1;
+}
+
+#confirm_msg {
+    color: darkkhaki;
+    text-align: center;
+    width: 100%;
+    padding: 1 0;
+}
+
+NoteScreen Label,
+StepScreen Label {
+    color: darkseagreen;
+    height: 1;
+    width: 100%;
+    padding-top: 1;
+}
+
+#modal_box Input {
+    background: #111;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    border-bottom: solid darkseagreen;
+    color: darkkhaki;
+    margin-bottom: 0;
+}
+
+#modal_box Input:focus {
+    border-bottom: solid goldenrod;
+    color: goldenrod;
+    background: #111;
+}
+
+#modal_btns {
+    height: auto;
+    align: center middle;
+    padding-top: 1;
+}
+
+#modal_btns Button {
+    margin: 0 1;
+}
+
+/* ── Button variants (themed) ───────────────────────────── */
+Button.-success {
+    background: #1a3a20;
+    color: darkseagreen;
+    border-top: tall #2a5a30;
+}
+
+Button.-success:hover {
+    background: #2a4a30;
+    color: lightgreen;
+}
+
+Button.-error {
+    background: #3a1010;
+    color: #cc5555;
+    border-top: tall #5a1818;
+}
+
+Button.-error:hover {
+    background: #4a1818;
+    color: #ff7777;
+}
+
+Button.-primary {
+    background: #10203a;
+    color: cadetblue;
+    border-top: tall #1a3560;
+}
+
+Button.-primary:hover {
+    background: #1a3050;
+    color: lightblue;
+}
+
+Button.-warning {
+    background: #3a2a10;
+    color: goldenrod;
+    border-top: tall #5a4010;
+}
+
+Button.-warning:hover {
+    background: #4a3818;
+    color: #ffd060;
+}
+
+Button.-default {
+    background: #222;
+    color: #888;
+    border-top: tall #333;
+}
+
+Button.-default:hover {
+    background: #2a2a2a;
+    color: darkkhaki;
+}
+
+/* ── File Picker Dialog ─────────────────────────────────── */
+FilePickerScreen {
+    align: center middle;
+}
+
+#fp_box {
+    background: #181818;
+    border: double darkseagreen;
+    padding: 1 2;
+    width: 70;
+    height: 80%;
+}
+
+#fp_title {
+    color: lightsalmon;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    padding-bottom: 1;
+}
+
+#fp_path {
+    color: #555;
+    height: auto;
+    padding-bottom: 1;
+}
+
+#fp_tree {
+    height: 1fr;
+    border: solid #2a2a2a;
+    background: #111;
+    margin-bottom: 1;
+}
+
+FilePickerScreen Label {
+    color: darkseagreen;
+    height: 1;
+    padding-top: 0;
+}
+
+#fp_name {
+    background: #111;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    border-bottom: solid darkseagreen;
+    color: darkkhaki;
+    margin-bottom: 1;
+}
+
+#fp_name:focus {
+    border-bottom: solid goldenrod;
+    color: goldenrod;
+    background: #111;
+}
+
+#fp_btns {
+    height: auto;
+    align: right middle;
 }
 

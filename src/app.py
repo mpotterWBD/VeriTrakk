@@ -1,1991 +1,1156 @@
-from textual.app import App, ComposeResult
-from textual.reactive import reactive
-from textual.events import Key
-from textual.widgets import Header, Footer, Label, Select, Rule, ContentSwitcher, Placeholder, Tree, Log, Markdown, Static, DirectoryTree, Tabs, Tab, TabbedContent, Input
-from textual.widgets._select import SelectOverlay
-from textual.binding import Binding
-from pathlib import Path
-from textual.screen import Screen
-from typing import Iterable
-from pathlib import Path
-import re
-from rich.text import Text
-from textual.containers import Container, Horizontal, VerticalScroll, Vertical
-from .storage import file_parser, number_of_files, file_reader, set_S, has_S, remove_S, file_parser_selected, save_root, has_child, read_root_and_file, strip_date_tag, strip_note_tag, get_note_for_label, set_note, read_all_notes, read_all_thresholds, get_threshold_for_label, get_threshold_from_line, strip_threshold_tags, set_pass_fail, remove_pass_fail
-
-FILES = []
-NOF = number_of_files(FILES)
-
-FIGLET = """
-┓┏┏┓┳┓┳┏┳┓┳┓┏┓┓┏┓
-┃┃┣ ┣┫┃ ┃ ┣┫┣┫┃┫ 
-┗┛┗┛┛┗┻ ┻ ┛┗┛┗┛┗┛
 """
+VeriTrakk  -  app.py
+Full rewrite with clean split-layout UI, modal screens for editing,
+toolbar-driven navigation, and CSV-backed data model.
+"""
+from __future__ import annotations
 
-HOME_MD = """\
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable
+
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button, ContentSwitcher, DirectoryTree, Footer, Header,
+    Input, Label, Log, Markdown, Static, Tree,
+)
+
+from .storage import (
+    DATA_DIR, LOGS_DIR, Process, Step,
+    load_process, save_process,
+    load_session, save_session,
+    sanitize_filename,
+    generate_log_text, publish_process,
+)
+
+# Brand colors as hex (Rich doesn't know Textual CSS color names)
+_SALMON  = "#ffa07a"  # lightsalmon
+_GREEN   = "#8fbc8f"  # darkseagreen
+_GOLD    = "#daa520"  # goldenrod
+_KHAKI   = "#bdb76b"  # darkkhaki
+_TEAL    = "#5f9ea0"  # cadetblue
+
+
+# ── Welcome content ───────────────────────────────────────────────────────────
+
+WELCOME_MD = """\
 # VeriTrakk
 
 **Process tracking, built for the floor.**
 
-VeriTrakk lets you build structured process checklists, track them step-by-step in real time, and publish completed runs as permanent log files — all from the keyboard.
+---
+
+## Quick Start
+
+1. **New** - Create a new process checklist
+2. **Open** - Load a `.prcss` process file
+3. **Resume** - Jump back into your last active process
+4. **Build** - Edit or create a process checklist
+5. **Logs** - Archive completed processes and review history
 
 ---
 
-## Navigation
+## Running a Process
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` | Move between tabs / select options / navigate trees |
-| `→` | Mark a step **complete** |
-| `←` | Un-mark a step |
-| `Enter` | Confirm selection |
-| `B` | Go back |
+| Arrow Up / Down | Navigate steps |
+| Arrow Right | Mark step **complete** |
+| Arrow Left | Un-mark a step |
+| N | Add / edit a **note** on the selected step |
 
----
-
-## Tabs
-
-### OPEN
-Browse a directory and select a `.prcss` process file to run interactively.
-
-### RESUME
-Re-open the last active process right where you left off.
-
-### PROCESS BUILDER
-Create or edit structured process files.
-
-- **NEW PROCESS** — Start fresh. Choose a save directory, then build your checklist tree.
-- **EDIT ACTIVE PROCESS** — Load the current active process into the builder for editing.
-
-### LOG
-Work with completed processes.
-
-- **DISSOLVE & PUBLISH** — Convert a `#COMPLETE` process into a timestamped `.prcsslog` archive and remove the source file.
-- **READ LOG** — Browse and display any existing `.prcsslog` file.
-
----
-
-## Process Builder Controls
+## Process Builder
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+S` / `S` | Save process |
-| `↑` `↓` | Navigate tree nodes |
-| `Ctrl+A` then `↑`/`↓` | Insert blank node above / below |
-| `Ctrl+D` | Delete selected node |
-| `Ctrl+T` | Toggle **Sub Process** tag |
-| `Ctrl+N` | Add / edit a note on the selected step |
-| `F` | Confirm save directory |
-| `Ctrl+B` | Exit builder back to mode select |
+| A | Add a new top-level step |
+| S | Add a sub-step under current step |
+| E | Edit selected step label / thresholds |
+| D | Delete selected step |
+| Ctrl+S | Save process |
 
 ---
 
-## File Types
-
-| Extension | Description |
-|-----------|-------------|
-| `.prcss` | Active process checklist |
-| `#COMPLETE.prcss` | Fully completed process, ready to publish |
-| `.prcsslog` | Published log archive |
-
----
-
-*Powered by Westbound Designs*
+*Westbound Designs*
 """
 
-class MainScreen(Screen):
-    # TITLE = "WELCOME TO VERITRAKK"
-   
 
-    BINDINGS = [
-        Binding("up", "mode_select_up", priority=True, show=False),
-        Binding("up", "select_up"),
-        Binding("down", "select_down"),
-        Binding("right", "select_right"),
-        Binding("left", "select_left"),
-        Binding("b", "back", "Back"),
-        Binding("ctrl+b", "unfocus_input", "Back"),
-        Binding("f", "select_builder_directory", "Select Dir"),
-        Binding("ctrl+a", "arm_builder_shift", "Shift", priority=True),
-        Binding("s", "save_builder_process", "Save"),
-        Binding("ctrl+s", "save_builder_process", "Save", priority=True),
-        Binding("ctrl+t", "toggle_tags", "Tags"),
-        Binding("ctrl+n", "note", "Note", priority=True),
-        Binding("ctrl+d", "delete_builder_node", "Delete", priority=True),
-    
-    ]
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-    def compose(self)-> ComposeResult:
-        yield Header(id="header")
-        # self.query_one("header").tall = True
+def _progress_bar(pct: float, width: int = 20) -> str:
+    filled = round(pct / 100 * width)
+    return "\u2588" * filled + "\u2591" * (width - filled)
 
-        with Vertical(id="main_panel"):
 
-#TABS START
-#--------------------------------------------------------------------------------------
-            with Container (id="graphical_header"):
-                yield Static(content=FIGLET,id="figlet")
-
-            # with Container(id="tab_placeholder"):
-            #     yield Placeholder("SELECT TABS GO HERE")
-#TABS END
-#--------------------------------------------------------------------------------------
-
-            with Horizontal(id="data_panel"):
-                with Vertical(id="left_panel"):
-                    with ContentSwitcher(initial="or_cont",id="or_content_switcher"):
-                        with Container(id="or_cont"):
-                            
-                            or_tab = Tabs(
-                                Tab("OPEN", id="open"),
-                                Tab("RESUME", id="resume"),
-                                Tab("PROCESS BUILDER", id="processbuilder"),
-                                Tab("LOG", id="log"),
-                                id="or_tab"
-)
-                            # or_tab = Tabs("OPEN","RESUME","PROCESS BUILDER",id="or_tab")
-                            
-                            yield or_tab
-                            yield Select(
-                                [("NEW PROCESS", "pb_new"), ("EDIT ACTIVE PROCESS", "pb_edit")],
-                                id="pb_mode_select",
-                                compact=True,
-                            )
-                            yield Select(
-                                [("DISSOLVE & PUBLISH", "log_dissolve"), ("READ LOG", "log_read")],
-                                id="log_mode_select",
-                                compact=True,
-                            )
-                    
-                    
-                        with Container(id="open_browse_cont"):
-                            yield ProcessFileTree(Path.home(), id="open_file_tree")
-
-                        with Container(id="file_and_select"):
-                            with Container(id="file_cont"):
-                                yield DirOnlyTree(Path.home(),id="file_tree")
-
-                        with Container(id="log_mode_cont"):
-                            with ContentSwitcher(initial="", id="log_mode_switcher"):
-                                with Container(id="log_dissolve_pane"):
-                                    yield CompleteProcessFileTree(Path.home(), id="dissolve_file_tree")
-                                with Container(id="log_read_pane"):
-                                    yield LogFileTree(Path.home(), id="read_log_file_tree")
-
-                  
-
-                with ContentSwitcher(initial="home_panel",id="ms_content_switcher"):
-                    with VerticalScroll(id="home_panel"):
-                        yield Markdown(HOME_MD, id="home_markdown")
-                    with Container(id="process_builder"):
-                        with ContentSwitcher(initial="builder_save_dir_select", id="builder_content_switcher"):
-
-                            with Container(id="builder_save_dir_select"):
-                                yield Static("SELECT DIRECTORY TO SAVE TO\n\nUse UP and DOWN to highlight a folder in the left file tree.\nPress F to select that folder.", id="builder_save_dir_prompt")
-
-                            with Vertical(id="builder_editor"):
-                                yield Input(placeholder="Process / Sub Process", id="builder_name_input")
-                                with Container(id="builder_tags_cont"):
-                                    yield Tabs(
-                                        Tab("SUB PROCESS", id="tag_subprocess"),
-                                        Tab("THRESHOLD", id="tag_threshold"),
-                                        id="builder_process_tags",
-                                    )
-                                    with Container(id="threshold_inputs_cont"):
-                                        yield Input(placeholder="Upper Threshold", id="threshold_upper_input")
-                                        yield Input(placeholder="Lower Threshold", id="threshold_lower_input")
-                                builder_tree: Tree[str] = Tree("NEW PROCESS", id="builder_tree")
-                                builder_tree.root.expand()
-                                builder_tree.guide_depth = 5
-                                builder_tree.root.add("Top Level Process", allow_expand=False)
-                                builder_tree.root.add("Sub Process", allow_expand=False)
-                                yield builder_tree
-
-                    with Container(id="process_cont"):
-                        self.tree_name = ""
-                        yield Input(placeholder="Add a note...", id="note_input")
-                        yield Input(placeholder="Enter threshold value...", id="threshold_value_input")
-                        prc_tree: Tree[str] = Tree("Process_Tree", id="process_tree")
-                        prc_tree.root.expand()
-                        prc_tree.guide_depth = 5
-                        yield prc_tree
-
-                    with Container(id="log_cont"):
-                        yield Log(id="log_output", auto_scroll=False)
-
-#CONTENTSWITCHER END
-#--------------------------------------------------------------------------------------
-
-        yield Footer()
-
-    # # def on_show(self) -> None:
-    # #     self.query_one("#file_tree").root.expand()
-
-    def _show_process_builder_mode_select(self) -> None:
-        self.tab_selected = "processbuilder"
-        self.builder_save_dir = None
-        self.query_one("#or_content_switcher").current = "or_cont"
-        self.query_one("#ms_content_switcher").current = "home_panel"
-        self.query_one("#or_tab").active = "processbuilder"
-        self.call_after_refresh(lambda: self.query_one("#or_tab").focus())
-
-    def _show_builder_save_directory_picker(self) -> None:
-        self.query_one("#or_content_switcher").current = "file_and_select"
-        self.query_one("#ms_content_switcher").current = "process_builder"
-        self.query_one("#builder_content_switcher", ContentSwitcher).current = "builder_save_dir_select"
-        file_tree = self.query_one("#file_tree", Tree)
-        file_tree.focus()
-        file_tree.root.expand()
-        file_tree.move_cursor(file_tree.root)
-
-    def action_select_builder_directory(self) -> None:
-        if isinstance(self.focused, Input):
-            return
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_save_dir_select":
-            return
-
-        file_tree = self.query_one("#file_tree", Tree)
-        node = file_tree.cursor_node
-        if node is None:
-            return
-
-        directory_path = None
-        node_data = getattr(node, "data", None)
-        if node_data is not None:
-            directory_path = getattr(node_data, "path", None)
-
-        if directory_path is None:
-            return
-
-        self.builder_save_dir = Path(directory_path)
-        self._open_process_builder_editor("pb_new")
-
-    def _get_active_process_name(self) -> str:
-        try:
-            saved_f = read_root_and_file()
-            path = Path(saved_f[0].replace("\n", ""))
-            file_name = saved_f[1].strip()
-            if file_name:
-                data = file_reader(path, file_name)
-                if data:
-                    return str(data[0]).replace("[S]|", "").strip()
-                return Path(file_name).stem
-        except (IndexError, FileNotFoundError, OSError):
-            pass
-        return "ACTIVE PROCESS"
-
-    def _load_active_process_into_builder_tree(self) -> str:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        try:
-            saved_f = read_root_and_file()
-            path = Path(saved_f[0].replace("\n", ""))
-            file_name = saved_f[1].strip()
-            if not file_name:
-                raise FileNotFoundError
-
-            data = file_reader(path, file_name)
-            if not data:
-                raise FileNotFoundError
-
-            root_raw = str(data[0]).strip()
-            root_is_complete = "[S]|" in root_raw
-            root_label = strip_threshold_tags(strip_note_tag(strip_date_tag(root_raw.replace("[S]|", "").replace("[>]|", "").strip())))
-            root_display = f"[COMPLETE]    {root_label}" if root_is_complete else root_label
-            builder_tree.reset(root_display)
-            builder_tree.root.expand()
-
-            current_node = builder_tree.root
-            for line in data[1:]:
-                raw_line = str(line).strip()
-                if not raw_line:
-                    continue
-
-                is_complete = "[S]|" in raw_line
-                is_child = "[>]|" in raw_line
-                label = strip_threshold_tags(strip_note_tag(strip_date_tag(raw_line.replace("[S]|", "").replace("[>]|", "").strip())))
-                if not label:
-                    continue
-
-                display_label = f"[COMPLETE]    {label}" if is_complete else label
-
-                if is_child:
-                    current_node.allow_expand = True
-                    current_node.add(display_label, allow_expand=False)
-                else:
-                    current_node = builder_tree.root.add(display_label, allow_expand=True)
-
-            self._expand_tree_node_recursive(builder_tree.root)
-            self._force_expand_builder_tree()
-            self.call_after_refresh(self._force_expand_builder_tree)
-            return root_display
-        except (IndexError, FileNotFoundError, OSError):
-            fallback_name = "ACTIVE PROCESS"
-            builder_tree.reset(fallback_name)
-            builder_tree.root.expand()
-            return fallback_name
-
-    def _expand_tree_node_recursive(self, node) -> None:
-        if node.children:
-            node.allow_expand = True
-        node.expand()
-        for child in node.children:
-            self._expand_tree_node_recursive(child)
-
-    def _force_expand_builder_tree(self) -> None:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        self._expand_tree_node_recursive(builder_tree.root)
-
-    def _open_process_builder_editor(self, mode: str) -> None:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        input_widget = self.query_one("#builder_name_input", Input)
-        self.query_one("#ms_content_switcher").current = "process_builder"
-        self.query_one("#or_content_switcher").current = "or_cont"
-        self.query_one("#builder_content_switcher", ContentSwitcher).current = "builder_editor"
-        self.builder_mode = mode
-        self.builder_shift_armed = False
-
-        if mode == "pb_edit":
-            process_name = self._load_active_process_into_builder_tree()
+def _step_label(
+    step: Step, *, sub_done: int | None = None, sub_total: int | None = None
+) -> Text:
+    """Rich Text label for a step node in the run-mode tree."""
+    if step.completed:
+        if step.result == "PASS":
+            t = Text(f"\u2713  {step.label}", style=f"bold {_GREEN}")
+            t.append("   PASS", style=f"bold {_GREEN}")
+        elif step.result == "FAIL":
+            t = Text(f"\u2717  {step.label}", style="bold red")
+            t.append("   FAIL", style="bold red")
         else:
-            process_name = "NEW PROCESS"
-            builder_tree.reset(process_name)
-            builder_tree.root.expand()
-            builder_tree.root.add("Top Level Process", allow_expand=False)
-            builder_tree.root.add("Sub Process", allow_expand=False)
-
-        input_widget.value = process_name
-        input_widget.focus()
-        builder_tree.move_cursor(builder_tree.root)
-        if mode == "pb_edit":
-            self._force_expand_builder_tree()
-            self.call_after_refresh(self._force_expand_builder_tree)
-            self.set_timer(0.05, self._force_expand_builder_tree)
-        self._sync_builder_input()
-
-    def action_delete_builder_node(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        builder_tree = self.query_one("#builder_tree", Tree)
-        node = builder_tree.cursor_node
-        if node is None or node is builder_tree.root:
-            return
-
-        root_label, model = self._capture_builder_model()
-
-        if node.parent is builder_tree.root:
-            top_index = list(builder_tree.root.children).index(node)
-            if len(model) <= 1:
-                self.notify("Cannot delete the only process item.")
-                return
-            # Promote children of deleted top-level node to top level after it
-            children = model[top_index]["children"]
-            model.pop(top_index)
-            for i, child_label in enumerate(reversed(children)):
-                model.insert(top_index, {"label": child_label, "children": []})
-            new_top = min(top_index, len(model) - 1)
-            cursor_path = ("top", new_top, None)
-        else:
-            parent = node.parent
-            top_index = list(builder_tree.root.children).index(parent)
-            child_index = list(parent.children).index(node)
-            model[top_index]["children"].pop(child_index)
-            # Move cursor to previous child or top-level parent
-            if model[top_index]["children"]:
-                new_child = max(0, child_index - 1)
-                cursor_path = ("child", top_index, new_child)
-            else:
-                cursor_path = ("top", top_index, None)
-
-        self._rebuild_builder_tree(root_label, model, cursor_path)
-        self.call_after_refresh(lambda: self.call_after_refresh(lambda: (
-            self._sync_builder_input(),
-            self.query_one("#builder_name_input", Input).focus()
-        )))
-
-    def action_arm_builder_shift(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        self.builder_shift_armed = True
-        self.notify("Shift armed: press UP or DOWN to insert a blank item.")
-
-    def _capture_builder_model(self) -> tuple[str, list[dict[str, list[str]]]]:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        root_label = str(builder_tree.root.label).strip()
-        model: list[dict[str, list[str]]] = []
-        for top_node in builder_tree.root.children:
-            model.append(
-                {
-                    "label": str(top_node.label).strip(),
-                    "children": [str(child.label).strip() for child in top_node.children],
-                }
-            )
-        return root_label, model
-
-    def _rebuild_builder_tree(self, root_label: str, model: list[dict[str, list[str]]], cursor_path: tuple[str, int, int | None] | None = None) -> None:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        builder_tree.reset(root_label)
-        builder_tree.root.expand()
-
-        created_top_nodes = []
-        for item in model:
-            children = item["children"]
-            top = builder_tree.root.add(item["label"], allow_expand=bool(children))
-            created_top_nodes.append(top)
-            for child_label in children:
-                top.allow_expand = True
-                top.add(child_label, allow_expand=False)
-
-        self._force_expand_builder_tree()
-
-        if cursor_path is not None:
-            level, top_idx, child_idx = cursor_path
-            target_node = None
-            if level == "top" and 0 <= top_idx < len(created_top_nodes):
-                target_node = created_top_nodes[top_idx]
-            elif level == "child" and 0 <= top_idx < len(created_top_nodes):
-                top = created_top_nodes[top_idx]
-                if child_idx is not None and 0 <= child_idx < len(top.children):
-                    target_node = top.children[child_idx]
-
-            if target_node is not None:
-                def _move(node=target_node):
-                    builder_tree.move_cursor(node)
-                self.call_after_refresh(_move)
-
-    def _insert_blank_builder_node(self, direction: str) -> None:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        node = builder_tree.cursor_node
-        if node is None or node is builder_tree.root:
-            self.builder_shift_armed = False
-            return
-
-        root_label, model = self._capture_builder_model()
-
-        if node.parent is builder_tree.root:
-            top_index = list(builder_tree.root.children).index(node)
-            insert_index = top_index if direction == "up" else top_index + 1
-            model.insert(insert_index, {"label": "", "children": []})
-            cursor_path = ("top", insert_index, None)
-        else:
-            parent = node.parent
-            top_index = list(builder_tree.root.children).index(parent)
-            child_index = list(parent.children).index(node)
-            insert_index = child_index if direction == "up" else child_index + 1
-            model[top_index]["children"].insert(insert_index, "")
-            cursor_path = ("child", top_index, insert_index)
-
-        self._rebuild_builder_tree(root_label, model, cursor_path)
-        self.builder_shift_armed = False
-
-        def _after_insert():
-            self._sync_builder_input()
-            self.query_one("#builder_name_input", Input).focus()
-
-        self.call_after_refresh(lambda: self.call_after_refresh(_after_insert))
-
-    def _set_selected_builder_node_subprocess(self, make_subprocess: bool) -> None:
-        builder_tree = self.query_one("#builder_tree", Tree)
-        node = builder_tree.cursor_node
-        if node is None or node is builder_tree.root:
-            return
-
-        root_label, model = self._capture_builder_model()
-
-        if node.parent is builder_tree.root:
-            top_index = list(builder_tree.root.children).index(node)
-            if not make_subprocess:
-                return
-            if top_index == 0:
-                self.notify("First top-level process can't be converted to sub process.")
-                self._sync_builder_tag_checkbox(node)
-                return
-
-            moving_item = model.pop(top_index)
-            parent_index = top_index - 1
-            parent_children = model[parent_index]["children"]
-            child_insert_at = len(parent_children)
-            parent_children.append(moving_item["label"])
-            parent_children.extend(moving_item["children"])
-            cursor_path = ("child", parent_index, child_insert_at)
-            self._rebuild_builder_tree(root_label, model, cursor_path)
-
-        else:
-            parent = node.parent
-            top_index = list(builder_tree.root.children).index(parent)
-            child_index = list(parent.children).index(node)
-            if make_subprocess:
-                return
-
-            child_label = model[top_index]["children"].pop(child_index)
-            insert_top_at = top_index + 1
-            model.insert(insert_top_at, {"label": child_label, "children": []})
-            cursor_path = ("top", insert_top_at, None)
-            self._rebuild_builder_tree(root_label, model, cursor_path)
-
-        self._sync_builder_input()
-        self.query_one("#builder_name_input", Input).focus()
-
-    def _sync_builder_tag_checkbox(self, node) -> None:
-        tags_cont = self.query_one("#builder_tags_cont", Container)
-        if node is None or node is self.query_one("#builder_tree", Tree).root:
-            tags_cont.remove_class("tag-on")
-            return
-        is_subprocess = node.parent is not self.query_one("#builder_tree", Tree).root
-        if is_subprocess:
-            tags_cont.add_class("tag-on")
-        else:
-            tags_cont.remove_class("tag-on")
-
-    def _strip_complete_prefix(self, label: str) -> tuple[str, bool]:
-        if "[COMPLETE]" not in label:
-            return label.strip(), False
-        cleaned = label.replace("[COMPLETE]", "", 1).strip()
-        return cleaned, True
-
-    def _to_prcss_line(self, label: str, is_child: bool) -> str:
-        clean_label, is_complete = self._strip_complete_prefix(label)
-        prefix = ""
-        if is_complete:
-            prefix += "[S]|"
-        if is_child:
-            prefix += "[>]|"
-        return f"{prefix}{clean_label}\n"
-
-    def _sanitize_process_file_name(self, process_name: str) -> str:
-        safe_name = re.sub(r'[<>:"/|?*]+', "_", process_name).strip()
-        if not safe_name:
-            safe_name = "new_process"
-        return f"{safe_name}.prcss"
-
-    def _get_builder_save_target(self) -> tuple[Path, str]:
-        if self.builder_mode == "pb_edit":
-            saved_f = read_root_and_file()
-            return Path(saved_f[0].replace("\n", "")), saved_f[1].strip()
-
-        if self.builder_save_dir is not None:
-            save_dir = self.builder_save_dir
-            builder_tree = self.query_one("#builder_tree", Tree)
-            root_label, _ = self._strip_complete_prefix(str(builder_tree.root.label))
-            file_name = self._sanitize_process_file_name(root_label)
-            return save_dir, file_name
-
-        try:
-            saved_f = read_root_and_file()
-            save_dir = Path(saved_f[0].replace("\n", ""))
-            if not save_dir.exists():
-                raise FileNotFoundError
-        except (IndexError, FileNotFoundError, OSError):
-            save_dir = Path.cwd() / "data"
-
-        builder_tree = self.query_one("#builder_tree", Tree)
-        root_label, _ = self._strip_complete_prefix(str(builder_tree.root.label))
-        file_name = self._sanitize_process_file_name(root_label)
-        return save_dir, file_name
-
-    def action_save_builder_process(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        builder_tree = self.query_one("#builder_tree", Tree)
-
-        save_dir, file_name = self._get_builder_save_target()
-        notes_map = read_all_notes(save_dir, file_name)
-        thresholds_map = read_all_thresholds(save_dir, file_name)
-        # Merge in-memory pending thresholds (covers new processes not yet saved)
-        thresholds_map.update(self._pending_thresholds)
-
-        def _make_line(label: str, is_child: bool) -> str:
-            base = self._to_prcss_line(label, is_child).rstrip("\n")
-            clean_label, _ = self._strip_complete_prefix(label)
-            clean_label = clean_label.strip()
-            ut, lt = thresholds_map.get(clean_label, ("", ""))
-            if ut or lt:
-                tag_str = (f"[UT={ut}]" if ut else "") + (f"[LT={lt}]" if lt else "")
-                base = f"{base}{tag_str}"
-            note = notes_map.get(clean_label, "")
-            return f"{base}|[n={note}]\n" if note else f"{base}\n"
-
-        output_lines = [_make_line(str(builder_tree.root.label), is_child=False)]
-
-        for top_level_node in builder_tree.root.children:
-            output_lines.append(_make_line(str(top_level_node.label), is_child=False))
-            for child_node in top_level_node.children:
-                output_lines.append(_make_line(str(child_node.label), is_child=True))
-
-        save_dir.mkdir(parents=True, exist_ok=True)
-        with open(save_dir / file_name, "w") as f:
-            f.writelines(output_lines)
-
-        save_root(str(save_dir), file_name)
-        self._pending_thresholds.clear()
-        self.notify(f"Saved: {save_dir / file_name}")
-
-    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
-        if event.tabs.id == "builder_process_tags":
-            return
-
-        if event.tabs.id != "or_tab":
-            return
-
-        tab = self.query_one("#or_tab")
-        resume_tab = self.query_one("#resume")
-        try:
-            if "resume" in tab.active:
-                resume_tab.label = "RESUME" + " \\[" + str(read_root_and_file()[1]).replace(".prcss","") + "]"
-            else:
-                resume_tab.label = "RESUME"
-        except IndexError:
-            resume_tab.label = "RESUME \\[NONE]"
-
-        active_id = event.tab.id if event.tab else None
-        self.query_one("#pb_mode_select", Select).display = (active_id == "processbuilder")
-        self.query_one("#log_mode_select", Select).display = (active_id == "log")
-
-        if active_id in ("open", "resume", "processbuilder"):
-            if self.query_one("#ms_content_switcher").current == "process_builder":
-                self.query_one("#ms_content_switcher").current = "home_panel"
-
-        
-
-
-    def on_key(self, event: Key) -> None:
-        # When the tags dialog is open, only ctrl+t and tag navigation is allowed.
-        if self.builder_tags_open:
-            if event.key == "ctrl+t":
-                return  # let the binding system handle it
-
-            upper_input = self.query_one("#threshold_upper_input", Input)
-            lower_input = self.query_one("#threshold_lower_input", Input)
-            tabs = self.query_one("#builder_process_tags", Tabs)
-            threshold_visible = self.query_one("#threshold_inputs_cont", Container).display
-
-            # Use self.focused (App-level, always in sync) instead of widget.has_focus
-            # which can lag by one frame after a programmatic focus() call.
-            focused_widget = self.focused
-            upper_focused = focused_widget is upper_input
-            lower_focused = focused_widget is lower_input
-            threshold_input_focused = upper_focused or lower_focused
-
-            # Up/down navigation between tabs and threshold inputs
-            if event.key == "down":
-                if threshold_visible and not threshold_input_focused and "tag_threshold" in self.builder_staged_tags:
-                    upper_input.focus()
-                    upper_input.cursor_position = len(upper_input.value)
-                    event.stop()
-                    return
-                if upper_focused:
-                    lower_input.focus()
-                    lower_input.cursor_position = len(lower_input.value)
-                    event.stop()
-                    return
-                event.stop()
-                return
-
-            if event.key == "up":
-                if lower_focused:
-                    upper_input.focus()
-                    upper_input.cursor_position = len(upper_input.value)
-                    event.stop()
-                    return
-                if upper_focused:
-                    tabs.focus()
-                    event.stop()
-                    return
-                event.stop()
-                return
-
-            # If a threshold input is focused, let it handle typing/backspace/etc.
-            if threshold_input_focused:
-                if event.key in ("left", "right"):
-                    # Let the input handle cursor movement, don't tab-navigate
-                    return
-                # All other keys (characters, backspace, delete, home, end) pass through
-                return
-
-            # Tab navigation with left/right when tabs are focused
-            if event.key in ("left", "right"):
-                tab_ids = [t.id for t in tabs.query(Tab)]
-                if tabs.active in tab_ids:
-                    current_idx = tab_ids.index(tabs.active)
-                    if event.key == "right":
-                        new_idx = (current_idx + 1) % len(tab_ids)
-                    else:
-                        new_idx = (current_idx - 1) % len(tab_ids)
-                    tabs.active = tab_ids[new_idx]
-                event.stop()
-                return
-
-            if event.key == "enter":
-                if tabs.active is None:
-                    event.stop()
-                    return
-                active_id = tabs.active
-                if active_id in self.builder_staged_tags:
-                    self.builder_staged_tags.discard(active_id)
-                else:
-                    self.builder_staged_tags.add(active_id)
-                self._apply_staged_tag_visuals()
-                # Immediately apply subprocess when toggled — no need to wait for Ctrl+T close
-                if active_id == "tag_subprocess":
-                    is_subprocess = "tag_subprocess" in self.builder_staged_tags
-                    self._set_selected_builder_node_subprocess(is_subprocess)
-                event.stop()
-                return
-
-            event.stop()
-            return
-
-        # If threshold input is open, Escape cancels it
-        if self.threshold_open and event.key == "escape":
-            tree = self.query_one("#process_tree")
-            tree.focus()
-            tv_input = self.query_one("#threshold_value_input", Input)
-            tv_input.display = False
-            tv_input.value = ""
-            self.threshold_open = False
-            event.stop()
-            return
-
-        if event.key != "enter":
-            return
-
-        tab = self.query_one("#or_tab")
-
-        # Main tab actions execute only when that top-level tab is focused + Enter is pressed.
-        if tab.has_focus and "open" in tab.active:
-            self.tab_selected = "open"
-            tab.active = ""
-            tree = self.query_one("#open_file_tree")
-            self.query_one("#or_content_switcher").current = "open_browse_cont"
-            tree.focus()
-            tree.root.expand()
-            tree.move_cursor(tree.root)
-            event.stop()
-            return
-
-        if tab.has_focus and "resume" in tab.active:
-            self.tab_selected = "resume"
-            tab.active = ""
-            self._resume_active_process()
-            event.stop()
-            return
-
-        if tab.has_focus and "processbuilder" in tab.active:
-            self.query_one("#pb_mode_select", Select).focus()
-            event.stop()
-            return
-
-        if tab.has_focus and "log" in tab.active:
-            self.tab_selected = "log"
-            self.query_one("#log_mode_select", Select).focus()
-            event.stop()
-            return
-   
-    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
-        if self.query_one("#ms_content_switcher").current == "process_builder":
-            if self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_save_dir_select":
-                self.builder_save_dir = event.path
-                self.notify(f"Save directory ready: {event.path}. Press F to confirm.")
-                return
-
-        if self.tab_selected == "log":
-            log_pane = self.query_one("#log_mode_switcher", ContentSwitcher).current
-            path = event.path
-            self.log_root = path
-            return
-
-        path = event.path
-        self.root = path
-        self.log("Directory highlighted =", str(path))
-        self.refresh_bindings()
-
-    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
-        tree_id = event.node.tree.id
-        file_path = event.path
-
-        if tree_id == "open_file_tree":
-            self._load_process(file_path.parent, file_path.name)
-            return
-
-        if tree_id == "dissolve_file_tree":
-            self._generate_log(file_path)
-            return
-
-        if tree_id == "read_log_file_tree":
-            self._display_prcsslog(file_path)
-            return
-
-    def on_directory_tree_node_selected(self, event: DirectoryTree.NodeSelected) -> None:
-        if self.query_one("#ms_content_switcher").current == "process_builder":
-            if self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_save_dir_select":
-                path = event.node.data.path
-                self.builder_save_dir = path
-                self.notify(f"Save directory ready: {path}. Press F to confirm.")
-            return
-
-    def action_unfocus_input(self) -> None:
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        # If the tags dialog is open (e.g. threshold inputs focused), close it cleanly
-        # before navigating away so builder_tags_open doesn't stay True and lock all input.
-        if self.builder_tags_open:
-            self.builder_tags_open = False
-            self.builder_staged_tags = set()
-            self.query_one("#threshold_inputs_cont", Container).display = False
-            self.query_one("#builder_tags_cont", Container).display = False
-
-        self._show_process_builder_mode_select()
-
-            
-    def check_action(self, action: str, parameters: tuple) -> bool | None:
-        if action == "mode_select_up":
-            try:
-                pb = self.query_one("#pb_mode_select", Select)
-                log = self.query_one("#log_mode_select", Select)
-                return pb.has_focus or log.has_focus or pb.expanded or log.expanded
-            except Exception:
-                return False
-        if action == "unfocus_input":
-            try:
-                return (
-                    self.query_one("#ms_content_switcher").current == "process_builder"
-                    and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor"
-                )
-            except Exception:
-                return False
-        if action == "save_builder_process":
-            try:
-                return (
-                    self.query_one("#ms_content_switcher").current == "process_builder"
-                    and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor"
-                )
-            except Exception:
-                return False
-        if action == "toggle_tags":
-            try:
-                return (
-                    self.builder_tags_open
-                    or self.query_one("#builder_name_input", Input).has_focus
-                )
-            except Exception:
-                return False
-        if action == "delete_builder_node":
-            try:
-                return self.query_one("#builder_name_input", Input).has_focus
-            except Exception:
-                return False
-        if action == "arm_builder_shift":
-            try:
-                return self.query_one("#builder_name_input", Input).has_focus
-            except Exception:
-                return False
-        if action == "select_builder_directory":
-            try:
-                return (
-                    self.query_one("#ms_content_switcher").current == "process_builder"
-                    and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_save_dir_select"
-                )
-            except Exception:
-                return False
-        if action == "note":
-            try:
-                return self.query_one("#ms_content_switcher").current == "process_cont"
-            except Exception:
-                return False
-        return True
-
-    def action_back(self) -> None:
-        if isinstance(self.focused, Input):
-            return
-        if self.builder_tags_open:
-            return
-        if self.note_open:
-            return
-        if self.threshold_open:
-            return
-        self.builder_shift_armed = False
-
-        # Back from log read view → go to main tabs with LOG active
-        if self.query_one("#ms_content_switcher", ContentSwitcher).current == "log_cont":
-            self.query_one("#ms_content_switcher", ContentSwitcher).current = "home_panel"
-            self.refresh_bindings()
-            self.query_one("#or_content_switcher").current = "or_cont"
-            self.query_one("#or_tab").active = "log"
-            self.query_one("#or_tab").focus()
-            return
-
-        # Back from a log pane → go to main tabs with LOG active
-        if self.query_one("#or_content_switcher").current == "log_mode_cont":
-            log_switcher = self.query_one("#log_mode_switcher", ContentSwitcher)
-            if log_switcher.current in ("log_dissolve_pane", "log_read_pane"):
-                self.query_one("#or_content_switcher").current = "or_cont"
-                self.query_one("#or_tab").active = "log"
-                self.query_one("#or_tab").focus()
-                return
-
-        if self.query_one("#ms_content_switcher", ContentSwitcher).current == "process_builder":
-            builder_switcher = self.query_one("#builder_content_switcher", ContentSwitcher)
-            if builder_switcher.current in ("builder_editor", "builder_save_dir_select"):
-                self._show_process_builder_mode_select()
-                return
-
-        # Back from open browse
-        if self.query_one("#or_content_switcher").current == "open_browse_cont":
-            self.query_one("#or_content_switcher").current = "or_cont"
-            self.query_one("#or_tab").focus()
-            return
-
-        self.query_one("#ms_content_switcher", ContentSwitcher).current = "home_panel"
-        self.query_one("#or_content_switcher").current = "or_cont"
-        self.query_one("#or_tab").focus()
-        self.query_one("#or_tab").active = "open"
-        self.query_one("#process_tree").reset(self.tree_name)
-
-
-    def action_toggle_tags(self) -> None:
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-        self.builder_tags_open = not self.builder_tags_open
-        tags_cont = self.query_one("#builder_tags_cont", Container)
-        if self.builder_tags_open:
-            # Sync staged state from the current node's actual state
-            self.builder_staged_tags = set()
-            builder_tree = self.query_one("#builder_tree", Tree)
-            node = builder_tree.cursor_node
-            if node and node is not builder_tree.root:
-                if node.parent is not builder_tree.root:
-                    self.builder_staged_tags.add("tag_subprocess")
-                # Check if this node already has threshold tags saved
-                node_label_clean, _ = self._strip_complete_prefix(str(node.label))
-                save_dir, file_name = self._get_builder_save_target()
-                ut, lt = get_threshold_for_label(node_label_clean.strip(), save_dir, file_name)
-                if ut or lt:
-                    self.builder_staged_tags.add("tag_threshold")
-                    self.query_one("#threshold_upper_input", Input).value = ut
-                    self.query_one("#threshold_lower_input", Input).value = lt
-                else:
-                    self.query_one("#threshold_upper_input", Input).value = ""
-                    self.query_one("#threshold_lower_input", Input).value = ""
-            tags_cont.display = True
-            self._apply_staged_tag_visuals()
-            self.query_one("#builder_process_tags", Tabs).focus()
-        else:
-            # Apply staged tags to the node
-            is_subprocess = "tag_subprocess" in self.builder_staged_tags
-            self._set_selected_builder_node_subprocess(is_subprocess)
-
-            # Save threshold tags if staged
-            if "tag_threshold" in self.builder_staged_tags:
-                builder_tree = self.query_one("#builder_tree", Tree)
-                node = builder_tree.cursor_node
-                if node and node is not builder_tree.root:
-                    node_label_clean, _ = self._strip_complete_prefix(str(node.label))
-                    ut = self.query_one("#threshold_upper_input", Input).value.strip()
-                    lt = self.query_one("#threshold_lower_input", Input).value.strip()
-                    clean_key = node_label_clean.strip()
-                    # Always buffer in memory so new (unsaved) files retain thresholds
-                    if ut or lt:
-                        self._pending_thresholds[clean_key] = (ut, lt)
-                    else:
-                        self._pending_thresholds.pop(clean_key, None)
-                    save_dir, file_name = self._get_builder_save_target()
-                    if save_dir.exists() and (save_dir / file_name).exists():
-                        self._write_threshold_to_file(clean_key, ut, lt, save_dir, file_name)
-
-            self.builder_staged_tags = set()
-            self.query_one("#threshold_inputs_cont", Container).display = False
-            tags_cont.display = False
-            self.query_one("#builder_name_input", Input).focus()
-
-    def action_note(self) -> None:
-        if self.query_one("#ms_content_switcher").current != "process_cont":
-            return
-
-        tree = self.query_one("#process_tree", Tree)
-        note_input = self.query_one("#note_input", Input)
-
-        if not self.note_open:
-            node = tree.cursor_node
-            if node is None:
-                return
-
-            raw_label = str(node.label)
-            clean_label = raw_label.replace("[COMPLETE]    ", "").replace("  [COMPLETE]    ", "").strip()
-
-            try:
-                saved_f = read_root_and_file()
-                if "resume" in self.tab_selected:
-                    path = Path(saved_f[0].replace("\n", ""))
-                    file = saved_f[1].strip()
-                else:
-                    if self.select_data is Select.NULL:
-                        return
-                    path = self.root
-                    file = str(self.select_data)
-            except (IndexError, FileNotFoundError, OSError):
-                return
-
-            existing_note = get_note_for_label(clean_label, path, file)
-            note_input.value = existing_note
-            note_input.display = True
-            self.note_open = True
-            self.refresh_bindings()
-            note_input.focus()
-            note_input.cursor_position = len(note_input.value)
-
-        else:
-            note_text = note_input.value
-            node = tree.cursor_node
-
-            try:
-                saved_f = read_root_and_file()
-                if "resume" in self.tab_selected:
-                    path = Path(saved_f[0].replace("\n", ""))
-                    file = saved_f[1].strip()
-                else:
-                    if self.select_data is Select.NULL:
-                        path = None
-                        file = None
-                    else:
-                        path = self.root
-                        file = str(self.select_data)
-            except (IndexError, FileNotFoundError, OSError):
-                path = None
-                file = None
-
-            if path is not None and file and node is not None:
-                raw_label = str(node.label)
-                clean_label = raw_label.replace("[COMPLETE]    ", "").replace("  [COMPLETE]    ", "").strip()
-                set_note(clean_label, note_text, path, file)
-                if note_text:
-                    self.notify("Note saved.")
-
-            note_input.display = False
-            note_input.value = ""
-            self.note_open = False
-            self.refresh_bindings()
-            tree.focus()
-
-    def _apply_staged_tag_visuals(self) -> None:
-        subprocess_tab = self.query_one("#tag_subprocess", Tab)
-        if "tag_subprocess" in self.builder_staged_tags:
-            subprocess_tab.add_class("tag-staged")
-        else:
-            subprocess_tab.remove_class("tag-staged")
-
-        threshold_tab = self.query_one("#tag_threshold", Tab)
-        threshold_active = "tag_threshold" in self.builder_staged_tags
-        if threshold_active:
-            threshold_tab.add_class("tag-staged")
-        else:
-            threshold_tab.remove_class("tag-staged")
-        self.query_one("#threshold_inputs_cont", Container).display = threshold_active
-
-    def _write_threshold_to_file(self, label: str, ut: str, lt: str, save_dir: Path, file_name: str) -> None:
-        """Write or clear [UT=...][LT=...] tags on the matching label line in the file."""
-        try:
-            with open(save_dir / file_name, 'r') as f:
-                data = f.readlines()
-        except OSError:
-            return
-        modified = []
-        for line in data:
-            stripped = line.strip()
-            stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
-            clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").strip()
-            if clean == label:
-                base = strip_threshold_tags(line.rstrip())
-                if ut or lt:
-                    tag_str = ""
-                    if ut:
-                        tag_str += f"[UT={ut}]"
-                    if lt:
-                        tag_str += f"[LT={lt}]"
-                    modified.append(f"{base}{tag_str}\n")
-                else:
-                    modified.append(f"{base}\n")
-            else:
-                modified.append(line)
-        with open(save_dir / file_name, 'w') as f:
-            f.writelines(modified)
-
-    def action_mode_select_up(self) -> None:
-        """Priority UP handler — only active when a mode select is focused/expanded."""
-        pb_select = self.query_one("#pb_mode_select", Select)
-        log_select = self.query_one("#log_mode_select", Select)
-        for sel in (pb_select, log_select):
-            if sel.has_focus:
-                # Closed dropdown focused → go back to tab
-                self.query_one("#or_tab").focus()
-                return
-            if sel.expanded:
+            ts = ""
+            if step.completed_at:
                 try:
-                    overlay = sel.query_one(SelectOverlay)
-                    if overlay.has_focus:
-                        if overlay.highlighted is None or overlay.highlighted == 0:
-                            # At the top → close dropdown and return to tab
-                            sel.expanded = False
-                            self.query_one("#or_tab").focus()
-                        else:
-                            # Move cursor up within the dropdown
-                            overlay.action_cursor_up()
-                        return
-                except Exception:
-                    self.query_one("#or_tab").focus()
-                    return
-
-    def action_select_down(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.note_open:
-            return
-        tab = self.query_one("#or_tab")
-        if tab.has_focus and "processbuilder" in tab.active:
-            sel = self.query_one("#pb_mode_select", Select)
-            sel.focus()
-            sel.expanded = True
-            def _jump_pb():
-                try:
-                    sel.query_one(SelectOverlay).highlighted = 0
-                except Exception:
-                    pass
-            self.call_after_refresh(lambda: self.call_after_refresh(_jump_pb))
-            return
-        if tab.has_focus and "log" in tab.active:
-            sel = self.query_one("#log_mode_select", Select)
-            sel.focus()
-            sel.expanded = True
-            def _jump_log():
-                try:
-                    sel.query_one(SelectOverlay).highlighted = 0
-                except Exception:
-                    pass
-            self.call_after_refresh(lambda: self.call_after_refresh(_jump_log))
-            return
-        tree = self.query_one("#process_tree")
-        if self.query_one("#ms_content_switcher").current == "process_cont":
-            tree.action_cursor_down()
-        elif self.query_one("#ms_content_switcher").current == "process_builder" and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor":
-            if self.builder_shift_armed:
-                self._insert_blank_builder_node("down")
-                return
-            builder_tree = self.query_one("#builder_tree", Tree)
-            builder_tree.action_cursor_down()
-            self._sync_builder_input()
-            self.query_one("#builder_name_input", Input).focus()
-        elif self.query_one("#ms_content_switcher").current == "process_builder" and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_save_dir_select":
-            file_tree = self.query_one("#file_tree", Tree)
-            file_tree.action_cursor_down()
-    
-    def action_select_up(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.note_open:
-            return
-        pb_select = self.query_one("#pb_mode_select", Select)
-        log_select = self.query_one("#log_mode_select", Select)
-        if pb_select.has_focus or log_select.has_focus:
-            self.query_one("#or_tab").focus()
-            return
-        tree = self.query_one("#process_tree")
-        if self.query_one("#ms_content_switcher").current == "process_cont":
-            tree.action_cursor_up()
-        elif self.query_one("#ms_content_switcher").current == "process_builder" and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor":
-            if self.builder_shift_armed:
-                self._insert_blank_builder_node("up")
-                return
-            builder_tree = self.query_one("#builder_tree", Tree)
-            builder_tree.action_cursor_up()
-            self._sync_builder_input()
-            self.query_one("#builder_name_input", Input).focus()
-        elif self.query_one("#ms_content_switcher").current == "process_builder" and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_save_dir_select":
-            file_tree = self.query_one("#file_tree", Tree)
-            file_tree.action_cursor_up()
-
-    def _sync_builder_input(self) -> None:
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        input_widget = self.query_one("#builder_name_input", Input)
-        builder_tree = self.query_one("#builder_tree", Tree)
-        node = builder_tree.cursor_node
-        if node is None:
-            return
-        label_text = str(node.label).strip()
-        input_widget.value = label_text
-        input_widget.cursor_position = len(input_widget.value)
-        builder_tree.set_class(label_text == "", "blank-focused")
-        self._refresh_builder_blank_focus_visual(node)
-        self._sync_builder_tag_checkbox(node)
-
-    def _refresh_builder_blank_focus_visual(self, focused_node) -> None:
-        builder_tree = self.query_one("#builder_tree", Tree)
-
-        def _all_nodes():
-            for top in builder_tree.root.children:
-                yield top
-                for child in top.children:
-                    yield child
-
-        for node in _all_nodes():
-            label_text = str(node.label).strip()
-            if label_text != "":
-                continue
-
-            if node is focused_node:
-                node.set_label(Text(" ", style="black on #00aa00"))
-            else:
-                node.set_label("")
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "builder_name_input":
-            return
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        builder_tree = self.query_one("#builder_tree", Tree)
-        node = builder_tree.cursor_node
-        if node is None:
-            return
-        node.set_label(event.value)
-        builder_tree.set_class(event.value.strip() == "", "blank-focused")
-        self._refresh_builder_blank_focus_visual(node)
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "builder_name_input":
-            return
-        if self.query_one("#ms_content_switcher").current != "process_builder":
-            return
-        if self.query_one("#builder_content_switcher", ContentSwitcher).current != "builder_editor":
-            return
-
-        builder_tree = self.query_one("#builder_tree", Tree)
-        node = builder_tree.cursor_node
-        if node is None:
-            return
-        node.set_label(event.value)
-        builder_tree.set_class(event.value.strip() == "", "blank-focused")
-        self._refresh_builder_blank_focus_visual(node)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "threshold_value_input":
-            return
-        if not self.threshold_open:
-            return
-
-        value_str = event.value.strip()
-        tree = self.query_one("#process_tree")
-        tree.focus()  # focus before hiding to prevent render glitch
-        tv_input = self.query_one("#threshold_value_input", Input)
-        tv_input.display = False
-        tv_input.value = ""
-        self.threshold_open = False
-
-        if not value_str:
-            return
-
-        try:
-            value = float(value_str)
-        except ValueError:
-            self.notify("Invalid number — threshold not recorded.", severity="warning")
-            self.query_one("#process_tree").focus()
-            return
-
-        saved_f = read_root_and_file()
-        if "resume" in self.tab_selected:
-            path = Path(saved_f[0].replace("\n", ""))
-            file = saved_f[1].strip()
-        else:
-            path = self.root
-            file = str(self.select_data)
-
-        ut_str, lt_str = get_threshold_for_label(self._threshold_node_label, path, file)
-        try:
-            ut = float(ut_str) if ut_str else None
-            lt = float(lt_str) if lt_str else None
-        except ValueError:
-            ut = lt = None
-
-        if (ut is None or value <= ut) and (lt is None or value >= lt):
-            result = "PASS"
-        else:
-            result = "FAIL"
-
-        set_pass_fail(self._threshold_node_label, result, path, file)
-
-        # Update tree node label
-        tree = self.query_one("#process_tree")
-        node = tree.cursor_node
-        if node is not None:
-            succ_c = "[COMPLETE]    "
-            succ_nc = "  [COMPLETE]    "
-            result_color = "green" if result == "PASS" else "red"
-            if node.parent and node.parent.parent:
-                new_label = Text(f"[COMPLETE]    {self._threshold_node_label}    [{result}]")
-            else:
-                new_label = Text(f"  [COMPLETE]    {self._threshold_node_label}    [{result}]")
-            new_label.stylize(result_color)
-            node.set_label(new_label)
-
-            # Auto-collapse parent when all children complete
-            if node.parent:
-                all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.children)
-                if all_complete:
-                    node.parent.collapse()
-                    parent_label = str(node.parent.label).replace(succ_c, "").strip()
-                    node.parent.set_label(Text(succ_c + parent_label, style="green"))
-                    set_S(str(parent_label), path, file)
-                    tree.move_cursor(node.parent)
-
-            if node.parent and node.parent.parent:
-                parents_all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.parent.children)
-                if parents_all_complete:
-                    node.parent.parent.collapse()
-                    ppl = str(node.parent.parent.label).replace(succ_c, "").strip()
-                    node.parent.parent.set_label(Text(succ_c + ppl, style="green"))
-                    set_S(str(ppl), path, file)
-
-            all_root_complete = (
-                len(tree.root.children) > 0
-                and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
-            )
-            if all_root_complete and "#COMPLETE" not in file:
-                new_file = file.replace(".prcss", "#COMPLETE.prcss")
-                try:
-                    (path / file).rename(path / new_file)
-                    save_root(str(path), new_file)
-                    self.select_data = new_file
-                    self.notify(f"Process complete! File renamed to {new_file}")
-                except OSError as e:
-                    self.notify(f"Could not rename file: {e}", severity="error")
-
-        self.notify(f"{result}: {value_str}")
-        tree.focus()
-
-    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        if self.query_one("#ms_content_switcher").current == "process_builder" and self.query_one("#builder_content_switcher", ContentSwitcher).current == "builder_editor":
-            self._sync_builder_input()
-            self.query_one("#builder_name_input", Input).focus()
-    
-    def action_select_right(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.query_one("#ms_content_switcher").current != "process_cont":
-            return
-        if self.threshold_open:
-            return
-
-        succ_c = "[COMPLETE]    "
-        succ_nc = "  [COMPLETE]    "
-        tree = self.query_one("#process_tree")
-        node = tree.cursor_node
-        node_buff = node.label
-
-        saved_f = read_root_and_file()
-        if "resume" in self.tab_selected:
-            path = Path(saved_f[0].replace("\n",""))
-            file = saved_f[1]
-        else:
-            path = self.root
-            file = str(self.select_data)
-
-        # If this leaf node has a threshold, open the value input instead of completing
-        if "[COMPLETE]" not in node_buff and len(node.children) == 0:
-            clean_label = str(node_buff).strip()
-            ut, lt = get_threshold_for_label(clean_label, path, file)
-            if ut != "" or lt != "":
-                self._threshold_node_label = clean_label
-                tv_input = self.query_one("#threshold_value_input", Input)
-                tv_input.value = ""
-                tv_input.display = True
-                parts = ([f"UT={ut}"] if ut != "" else []) + ([f"LT={lt}"] if lt != "" else [])
-                tv_input.placeholder = "  ".join(parts)
-                self.threshold_open = True
-                tv_input.focus()
-                return
-
-        #Applies to nodes with out COMPLETE and nodes with no children
-        if "[COMPLETE]" not in node_buff and len(node.children) == 0:
-            set_S(str(node_buff), path, file)
-            #Checks if node is a [>]
-            if node.parent.parent:
-                node.label = succ_c + str(node_buff)
-            else:
-                node.label = succ_nc + str(node_buff)
-                
-            self.log(node.label)
-            node.label.stylize("green")
-            # node.set_label(node.label)
-
-        #Auto collapeses parent when children are COMPLETEful
-        if node.parent:
-            all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.children)
-            if all_complete:
-                node.parent.collapse()
-                parent_label = str(node.parent.label).replace(succ_c, "").strip()
-                node.parent.set_label(Text(succ_c + parent_label, style="green"))
-                set_S(str(parent_label), path, file)
-                tree.move_cursor(node.parent)
-
-        #Auto collapeses root when everything is complete
-        if node.parent and node.parent.parent:
-            parents_all_complete = all("[COMPLETE]" in str(child.label) for child in node.parent.parent.children)
-            if parents_all_complete:
-                node.parent.parent.collapse()
-                parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
-                node.parent.parent.set_label(Text(succ_c + parents_parent_label, style="green"))
-                set_S(str(parents_parent_label), path, file)
-
-        #Rename file when all top-level processes are complete
-        all_root_complete = (
-            len(tree.root.children) > 0
-            and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
-        )
-        if all_root_complete and "#COMPLETE" not in file:
-            new_file = file.replace(".prcss", "#COMPLETE.prcss")
-            try:
-                (path / file).rename(path / new_file)
-                save_root(str(path), new_file)
-                self.select_data = new_file
-                self.notify(f"Process complete! File renamed to {new_file}")
-            except OSError as e:
-                self.notify(f"Could not rename file: {e}", severity="error")
-        
-    def action_select_left(self) -> None:
-        if self.builder_tags_open:
-            return
-        if self.query_one("#ms_content_switcher").current != "process_cont":
-            return
-
-        succ_c = "[COMPLETE]    "
-        succ_nc = "  [COMPLETE ]    "
-        tree = self.query_one("#process_tree")
-        node = tree.cursor_node
-        node_buff = node.label
-
-        saved_f = read_root_and_file()
-        if "resume" in self.tab_selected:
-            path = Path(saved_f[0].replace("\n",""))
-            file = saved_f[1]
-        else:
-            path = self.root
-            file = str(self.select_data)
-
-        # Handle threshold PASS/FAIL nodes — strip [COMPLETE] prefix and [PASS/FAIL] suffix and restore
-        node_buff_str = str(node_buff)
-        if ("[PASS]" in node_buff_str or "[FAIL]" in node_buff_str) and len(node.children) == 0:
-            clean_label = node_buff_str
-            clean_label = re.sub(r'^\s*\[COMPLETE\]\s*', '', clean_label)
-            clean_label = re.sub(r'\s*\[(?:PASS|FAIL)\]\s*$', '', clean_label).strip()
-            remove_pass_fail(clean_label, path, file)
-            node.set_label(clean_label)
-
-            # Also un-complete any parent nodes
-            if node.parent:
-                parent_label = str(node.parent.label).replace(succ_c, "").strip()
-                remove_S("[S]|" + parent_label, path, file)
-                node.parent.label = parent_label
-                node.parent.label.stylize("default")
-                node.parent.expand()
-
-            if node.parent and node.parent.parent:
-                ppl = str(node.parent.parent.label).replace(succ_c, "").strip()
-                remove_S("[S]|" + ppl, path, file)
-                node.parent.parent.label = ppl
-                node.parent.parent.label.stylize("default")
-                node.parent.parent.expand()
-
-            if "#COMPLETE" in file:
-                not_all_complete = any("[COMPLETE]" not in str(child.label) for child in tree.root.children)
-                if not_all_complete:
-                    old_file = file.replace("#COMPLETE.prcss", ".prcss")
-                    try:
-                        (path / file).rename(path / old_file)
-                        save_root(str(path), old_file)
-                        self.select_data = old_file
-                        self.notify(f"Process incomplete — file renamed back to {old_file}")
-                    except OSError as e:
-                        self.notify(f"Could not rename file: {e}", severity="error")
-            return
-
-        #Applies to nodes with COMPLETE and nodes with no children
-        if succ_c in node_buff and len(node.children) == 0:
-            self.log("WE ARE EFFECTING CHILD WITH NO CHILD")
-            self.log("node_buff = " + str(node_buff))
-            
-            #handles formatting based on if child has no children inside and has a parent or if just a child uner main root
-            if succ_c in str(node_buff):
-                new_label = str(node_buff).replace(succ_c,"").strip()
-            elif succ_nc in str(node_buff):
-                new_label = str(node_buff).replace(succ_nc,"").strip()
-            
-            self.log("to remove = " + "[S]|" + str(new_label))
-            remove_S("[S]|" + str(new_label).strip(), path, file)
-            node.label = new_label
-            node.label.stylize("default")
-
-        #Applies to nodes with COMPLETE and nodes with children
-        if node.parent:
-            parent_label = str(node.parent.label).replace(succ_c, "").strip()
-            remove_S("[S]|" + str(parent_label), path, file)
-            node.parent.label = parent_label
-            node.parent.label.stylize("default")
-
-        #Applies to root node
-        if node.parent and node.parent.parent:
-            parents_parent_label = str(node.parent.parent.label).replace(succ_c, "").strip()
-            remove_S("[S]|" + str(parents_parent_label), path, file)
-            node.parent.parent.label = parents_parent_label
-            node.parent.parent.label.stylize("default")
-
-        #Rename back if file was marked #COMPLETE but is no longer fully complete
-        if "#COMPLETE" in file:
-            not_all_complete = any("[COMPLETE]" not in str(child.label) for child in tree.root.children)
-            if not_all_complete:
-                old_file = file.replace("#COMPLETE.prcss", ".prcss")
-                try:
-                    (path / file).rename(path / old_file)
-                    save_root(str(path), old_file)
-                    self.select_data = old_file
-                    self.notify(f"Process incomplete — file renamed back to {old_file}")
-                except OSError as e:
-                    self.notify(f"Could not rename file: {e}", severity="error")
-                
-    def on_mount(self) -> None:
-        self.tab_selected = ""
-        self.builder_mode = ""
-        self.builder_save_dir = None
-        self.builder_shift_armed = False
-        self.builder_updating_tags = False
-        self.builder_tags_open = False
-        self.builder_staged_tags: set[str] = set()
-        self._pending_thresholds: dict[str, tuple[str, str]] = {}
-        self.note_open = False
-        self.threshold_open = False
-        self._threshold_node_label: str = ""
-        self.root = Path.home()
-        self.log_root = Path.home()
-        self.select_data = Select.NULL
-
-        self.title = "WELCOME TO VERITRAK"
-        self.sub_title = "Powered by Westbound Designs"
-
-        process_cont = self.query_one("#process_cont", Container)
-        process_cont.border_title = "PROCESS TREE"
-        self.query_one("#note_input", Input).display = False
-        self.query_one("#threshold_value_input", Input).display = False
-
-        process_builder = self.query_one("#process_builder")
-        process_builder.border_title = "PROCESS BUILDER"
-
-        tags_cont = self.query_one("#builder_tags_cont", Container)
-        tags_cont.border_title = "PROCESS TAGS"
-        tags_cont.display = False
-        self.query_one("#threshold_inputs_cont", Container).display = False
-
-        self.query_one("#or_tab").focus()
-        
-    def on_screen_resume(self) -> None:
-        pass
-
-    def _generate_log(self, file_path: Path) -> None:
-        path = file_path.parent
-        file_name = file_path.name
-
-        try:
-            data = file_reader(path, file_name)
-        except OSError as e:
-            self.notify(f"Could not read file: {e}", severity="error")
-            return
-
-        from datetime import datetime as _dt
-
-        lines = []
-        process_name = strip_date_tag(str(data[0]).replace("[S]|", "").strip()) if data else file_name
-
-        # Parse completion date from root line if present
-        root_raw = str(data[0]).strip() if data else ""
-        root_date = ""
-        if "|[d=" in root_raw:
-            root_date = root_raw.split("|[d=")[-1].rstrip("]").strip()
-            try:
-                root_date = _dt.strptime(root_date, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                pass
-
-        lines.append(f"PROCESS LOG: {process_name}")
-        if root_date:
-            lines.append(f"Completed: {root_date}")
-        lines.append("=" * 60)
-        lines.append("")
-
-        current_parent = None
-        for raw in data[1:]:
-            raw = raw.strip()
-            if not raw:
-                continue
-            is_complete = "[S]|" in raw
-            is_child = "[>]|" in raw
-            label = strip_note_tag(strip_date_tag(raw.replace("[S]|", "").replace("[>]|", "").strip()))
-
-            # Parse note
-            note_text = ""
-            if "|[n=" in raw:
-                note_start = raw.find("|[n=") + 4
-                note_end = raw.find("]", note_start)
-                if note_end != -1:
-                    note_text = raw[note_start:note_end]
-
-            # Parse completion date (stop at first ] after [d= to avoid consuming note tags)
-            date_str = ""
-            if "|[d=" in raw:
-                date_part = raw.split("|[d=", 1)[1]
-                end_idx = date_part.find("]")
-                if end_idx != -1:
-                    date_part = date_part[:end_idx]
-                date_str = date_part.strip()
-                try:
-                    date_str = _dt.strptime(date_str, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                    dt = datetime.fromisoformat(step.completed_at)
+                    ts = f"   {dt.strftime('%H:%M')}"
                 except ValueError:
                     pass
+            t = Text(f"\u2713  {step.label}", style=_GREEN)
+            if ts:
+                t.append(ts, style=f"dim {_GREEN}")
+    else:
+        t = Text(f"\u25cb  {step.label}")
+        if sub_done is not None and sub_total:
+            t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
+        if step.has_threshold():
+            t.append("  \u2299", style=_TEAL)
+        if step.note:
+            t.append("  \xb7", style=f"dim {_KHAKI}")
+    return t
 
-            status = f"[COMPLETE - {date_str}]" if is_complete and date_str else ("[COMPLETE]" if is_complete else "[INCOMPLETE]")
 
-            if is_child:
-                lines.append(f"    {label:<40} {status}")
-                if note_text:
-                    lines.append(f"      NOTE: {note_text}")
-            else:
-                current_parent = label
-                lines.append(f"  {label:<42} {status}")
-                if note_text:
-                    lines.append(f"    NOTE: {note_text}")
+def _builder_label(step: Step) -> Text:
+    """Rich Text label for a step node in the builder tree."""
+    prefix = "  " if step.level == 2 else ""
+    t = Text(f"{prefix}{step.label}")
+    extras: list[str] = []
+    if step.note:
+        extras.append("[N]")
+    if step.has_threshold():
+        extras.append("[T]")
+    if extras:
+        t.append(f"  {'  '.join(extras)}", style=f"dim {_KHAKI}")
+    return t
 
-        lines.append("")
-        lines.append("=" * 60)
-        log_text = "\n".join(lines)
 
-        # Write .prcsslog file
-        log_file_name = (
-            file_name.replace("#COMPLETE.prcss", ".prcsslog")
-            if "#COMPLETE.prcss" in file_name
-            else file_name.replace(".prcss", ".prcsslog")
-        )
-        try:
-            with open(path / log_file_name, "w") as f:
-                f.write(log_text)
-        except OSError as e:
-            self.notify(f"Could not write log: {e}", severity="error")
-            return
+# ── Specialized DirectoryTree subclasses ──────────────────────────────────────
 
-        # Copy log to data/logs/
-        logs_dir = Path.cwd() / "data" / "logs"
-        try:
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            (logs_dir / log_file_name).write_text(log_text)
-        except OSError as e:
-            self.notify(f"Could not copy to logs dir: {e}", severity="error")
-            return
+class ProcessFileTree(DirectoryTree):
+    """Shows directories and .prcss files only."""
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [
+            p for p in paths
+            if p.is_dir() or (p.suffix == ".prcss" and "#COMPLETE" not in p.name)
+        ]
 
-        # Delete the #COMPLETE.prcss file
-        prcss_path = path / file_name
-        if prcss_path.exists():
-            try:
-                prcss_path.unlink()
-            except OSError as e:
-                self.notify(f"Could not delete process file: {e}", severity="error")
-                return
-        else:
-            self.notify(f"Warning: {file_name} not found to delete", severity="warning")
 
-        # Go back to main tabs with LOG active
-        self.query_one("#or_content_switcher").current = "or_cont"
-        self.query_one("#or_tab").active = "log"
-        self.query_one("#or_tab").focus()
-        self.notify(f"Published! Archived to data/logs/{log_file_name}")
+class LogFileTree(DirectoryTree):
+    """Shows directories, .prcsslog files, and #COMPLETE.prcss files."""
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [
+            p for p in paths
+            if p.is_dir()
+            or p.suffix == ".prcsslog"
+            or (p.suffix == ".prcss" and "#COMPLETE" in p.name)
+        ]
 
-        # Clear the active process hint on the RESUME tab if it pointed to the dissolved file
-        try:
-            saved_f = read_root_and_file()
-            active_file = saved_f[1].strip() if len(saved_f) > 1 else ""
-            if active_file == file_name:
-                save_root(str(path), "")
-                resume_tab = self.query_one("#resume")
-                resume_tab.label = "RESUME \\[NONE]"
-        except (IndexError, FileNotFoundError, OSError):
-            pass
-
-    def _display_prcsslog(self, file_path: Path) -> None:
-        try:
-            log_text = file_path.read_text()
-        except OSError as e:
-            self.notify(f"Could not read log: {e}", severity="error")
-            return
-
-        log_widget = self.query_one("#log_output", Log)
-        log_widget.clear()
-        for line in log_text.splitlines():
-            log_widget.write_line(line)
-        self.query_one("#ms_content_switcher").current = "log_cont"
-        self.refresh_bindings()
-
-    def _load_process(self, path: Path, file_name: str) -> None:
-        """Populate the process tree from a .prcss file and show process_cont."""
-        tree = self.query_one("#process_tree")
-        tree.reset(self.tree_name)
-
-        try:
-            data = file_reader(path, file_name)
-        except OSError as e:
-            self.notify(f"Could not read file: {e}", severity="error")
-            return
-
-        self.root = path
-        self.select_data = file_name
-        save_root(str(path), file_name)
-
-        tree.root.label = data[0]
-
-        if "[S]" in tree.root.label:
-            new_root_label = "[COMPLETE]    " + strip_date_tag(str(tree.root.label).replace("[S]|","").rstrip())
-            tree.root.label = new_root_label
-            tree.root.label.stylize("green")
-            tree.root.collapse()
-        else:
-            tree.root.expand()
-
-        data.remove(data[0])
-
-        def _make_complete_label(raw: str, child: bool) -> Text:
-            """Build a [COMPLETE] or [COMPLETE][PASS/FAIL] label Text from a raw [S] line."""
-            pf_match = re.search(r'\[(PASS|FAIL)\]', raw)
-            result = pf_match.group(1) if pf_match else None
-            clean = re.sub(r'\[PASS\]|\[FAIL\]', '', strip_threshold_tags(strip_note_tag(strip_date_tag(raw.replace("[>]|","").replace("[S]|","").rstrip())))).strip()
-            if result:
-                prefix = "[COMPLETE]    " if not child else "  [COMPLETE]    "
-                color = "green" if result == "PASS" else "red"
-                label_str = "{}{}    [{}]".format(prefix, clean, result)
-            else:
-                prefix = ("[COMPLETE]    " if not child else "  [COMPLETE]    ")
-                color = "green"
-                label_str = prefix + clean
-            t = Text(label_str)
-            t.stylize(color)
-            return t
-
-        current_node = None
-        for x in data:
-            if "[>]" in x:
-                if "[S]" in x:
-                    current_node.allow_expand = True
-                    current_node.add_leaf(_make_complete_label(x, child=True))
-                else:
-                    current_node.allow_expand = True
-                    current_node.add_leaf(strip_threshold_tags(strip_note_tag(strip_date_tag(x.replace("[>]|","").rstrip()))))
-                    current_node.expand_all()
-            else:
-                if "[S]" in x and has_child(data, x):
-                    current_node = tree.root.add_leaf(_make_complete_label(x, child=False))
-                elif "[S]" in x and not has_child(data, x):
-                    lbl = _make_complete_label(x, child=False)
-                    # top-level leaf without children gets extra indent if no PASS/FAIL
-                    if "[PASS]" not in x and "[FAIL]" not in x:
-                        lbl = Text("  [COMPLETE]    " + strip_threshold_tags(strip_note_tag(strip_date_tag(x.replace("[S]|","").rstrip()))))
-                        lbl.stylize("green")
-                    current_node = tree.root.add_leaf(lbl)
-                else:
-                    current_node = tree.root.add(strip_threshold_tags(strip_note_tag(strip_date_tag(x.rstrip()))), allow_expand=False)
-
-        succ_c_load = "[COMPLETE]    "
-        for top_node in tree.root.children:
-            if top_node.children:
-                all_sub_complete = all("[COMPLETE]" in str(child.label) for child in top_node.children)
-                if not all_sub_complete and "[COMPLETE]" in str(top_node.label):
-                    clean = re.sub(r'^\s*\[COMPLETE\](?:\[(?:PASS|FAIL)\])?\s*', '', str(top_node.label)).strip()
-                    top_node.set_label(clean)
-                    top_node.expand()
-
-        all_top_complete = (
-            len(tree.root.children) > 0
-            and all("[COMPLETE]" in str(child.label) for child in tree.root.children)
-        )
-        if not all_top_complete and "[COMPLETE]" in str(tree.root.label):
-            root_clean = re.sub(r'^\s*\[COMPLETE\](?:\[(?:PASS|FAIL)\])?\s*', '', str(tree.root.label)).strip()
-            tree.root.label = root_clean
-            tree.root.expand()
-
-        self.query_one("#ms_content_switcher").current = "process_cont"
-        self.call_after_refresh(self.query_one("#process_tree").focus)
-
-    def _resume_active_process(self) -> None:
-        """Load and display the last saved active process."""
-        try:
-            saved_f = read_root_and_file()
-            path = Path(saved_f[0].replace("\n", ""))
-            file_name = saved_f[1].strip()
-            if not file_name:
-                self.notify("No active process to resume.", severity="warning")
-                return
-        except (IndexError, FileNotFoundError, OSError):
-            self.notify("No active process to resume.", severity="warning")
-            return
-        self._load_process(path, file_name)
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-
-        if event.select.id == "pb_mode_select":
-            if event.value is Select.BLANK:
-                return
-            mode = event.value
-            self.query_one("#pb_mode_select", Select).clear()
-            if mode == "pb_new":
-                self._show_builder_save_directory_picker()
-            elif mode == "pb_edit":
-                self._open_process_builder_editor("pb_edit")
-            return
-
-        if event.select.id == "log_mode_select":
-            if event.value is Select.BLANK:
-                return
-            mode = event.value
-            self.tab_selected = "log"
-            self.query_one("#log_mode_select", Select).clear()
-            self.query_one("#or_content_switcher").current = "log_mode_cont"
-            if mode == "log_dissolve":
-                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_dissolve_pane"
-                tree = self.query_one("#dissolve_file_tree")
-                tree.focus()
-                tree.root.expand()
-                tree.move_cursor(tree.root)
-                self.call_after_refresh(self._expand_dissolve_tree_to_active)
-            elif mode == "log_read":
-                self.query_one("#log_mode_switcher", ContentSwitcher).current = "log_read_pane"
-                tree = self.query_one("#read_log_file_tree")
-                tree.focus()
-                tree.root.expand()
-                tree.move_cursor(tree.root)
-            return
-
-        if event.select.id == "dissolve_select":
-            return
-
-    def _expand_dissolve_tree_to_active(self) -> None:
-        """Expand the dissolve file tree and move cursor to the active process file."""
-        try:
-            saved_f = read_root_and_file()
-            target_dir = Path(saved_f[0].replace("\n", ""))
-            target_file = saved_f[1].strip()
-            if not target_file:
-                return
-            target_path = target_dir / target_file
-        except (IndexError, OSError):
-            return
-
-        tree = self.query_one("#dissolve_file_tree")
-        tree_root_path = Path.home()
-
-        try:
-            rel_parts = list(target_dir.relative_to(tree_root_path).parts)
-        except ValueError:
-            return  # Active process not under home directory
-
-        def _navigate(node, remaining_parts):
-            if not remaining_parts:
-                # Look for the file node among the current node's children
-                for child in node.children:
-                    try:
-                        if child.data.path == target_path:
-                            tree.move_cursor(child)
-                            return
-                    except AttributeError:
-                        pass
-                # File node not visible (not #COMPLETE), settle on the directory
-                tree.move_cursor(node)
-                return
-
-            next_name = remaining_parts[0]
-            for child in node.children:
-                try:
-                    if child.data.path.name == next_name:
-                        child.expand()
-                        self.call_after_refresh(
-                            lambda c=child, r=remaining_parts[1:]: _navigate(c, r)
-                        )
-                        return
-                except AttributeError:
-                    pass
-            # Directory not found in tree (maybe not loaded yet), stay on current node
-            tree.move_cursor(node)
-
-        _navigate(tree.root, rel_parts)
 
 class DirOnlyTree(DirectoryTree):
-    def on_show(self) -> None:
-        self.root.expand()
-
+    """Shows only directories (for picking a save location)."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [p for p in paths if p.is_dir()]
 
-class ProcessFileTree(DirectoryTree):
-    def on_show(self) -> None:
-        self.root.expand()
 
-    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        return [p for p in paths if p.is_dir() or p.suffix == ".prcss"]
+# ── Modal Screens ─────────────────────────────────────────────────────────────
 
-class CompleteProcessFileTree(DirectoryTree):
-    def on_show(self) -> None:
-        self.root.expand()
+class NoteScreen(ModalScreen):
+    """Add or edit a note on a step."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        return [p for p in paths if p.is_dir() or ("#COMPLETE" in p.name and p.suffix == ".prcss")]
+    def __init__(self, current_note: str = "") -> None:
+        super().__init__()
+        self._current = current_note
 
-class LogFileTree(DirectoryTree):
-    def on_show(self) -> None:
-        self.root.expand()
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Static("Add / Edit Note", id="modal_title")
+            yield Input(value=self._current, placeholder="Enter note...", id="note_inp")
+            with Horizontal(id="modal_btns"):
+                yield Button("Save",   variant="primary", id="btn_save")
+                yield Button("Clear",  variant="warning", id="btn_clear")
+                yield Button("Cancel",                   id="btn_cancel")
 
-    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        return [p for p in paths if p.is_dir() or p.suffix == ".prcsslog"]
-    
-class veritrakk(App):
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_clear":
+            self.dismiss("")
+        elif event.button.id == "btn_save":
+            self.dismiss(self.query_one("#note_inp", Input).value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+
+class ThresholdScreen(ModalScreen):
+    """Enter a measured value to check against upper/lower thresholds."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, label: str, upper: str, lower: str) -> None:
+        super().__init__()
+        self._label = label
+        self._upper = upper
+        self._lower = lower
+
+    def compose(self) -> ComposeResult:
+        parts: list[str] = []
+        if self._upper:
+            parts.append(f"Upper <= {self._upper}")
+        if self._lower:
+            parts.append(f"Lower >= {self._lower}")
+        bounds = "  |  ".join(parts) if parts else "No bounds configured"
+
+        with Vertical(id="modal_box"):
+            yield Static("Threshold Check", id="modal_title")
+            yield Static(self._label, id="thresh_step_label")
+            yield Static(bounds,      id="thresh_bounds")
+            yield Input(placeholder="Enter measured value...", id="thresh_inp")
+            with Horizontal(id="modal_btns"):
+                yield Button("Submit", variant="primary", id="btn_submit")
+                yield Button("Cancel",                   id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_submit":
+            self._submit()
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        self.dismiss(self.query_one("#thresh_inp", Input).value.strip())
+
+
+class StepScreen(ModalScreen):
+    """Add or edit a step: label, optional note, optional thresholds."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, existing: Step | None = None, title: str = "Add Step") -> None:
+        super().__init__()
+        self._ex    = existing
+        self._title = title
+
+    def compose(self) -> ComposeResult:
+        ex = self._ex
+        with Vertical(id="modal_box"):
+            yield Static(self._title, id="modal_title")
+            yield Label("Label")
+            yield Input(
+                value=ex.label if ex else "",
+                placeholder="Step name...", id="step_label",
+            )
+            yield Label("Note  (optional)")
+            yield Input(
+                value=ex.note if ex else "",
+                placeholder="Note...", id="step_note",
+            )
+            yield Label("Upper Threshold  (optional)")
+            yield Input(
+                value=ex.threshold_upper if ex else "",
+                placeholder="e.g. 5.3", id="step_ut",
+            )
+            yield Label("Lower Threshold  (optional)")
+            yield Input(
+                value=ex.threshold_lower if ex else "",
+                placeholder="e.g. 4.7", id="step_lt",
+            )
+            with Horizontal(id="modal_btns"):
+                yield Button("Save",   variant="primary", id="btn_save")
+                yield Button("Cancel",                   id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_save":
+            self._submit()
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        label = self.query_one("#step_label", Input).value.strip()
+        if not label:
+            return
+        self.dismiss({
+            "label":           label,
+            "note":            self.query_one("#step_note", Input).value.strip(),
+            "threshold_upper": self.query_one("#step_ut",   Input).value.strip(),
+            "threshold_lower": self.query_one("#step_lt",   Input).value.strip(),
+        })
+
+
+class ConfirmScreen(ModalScreen):
+    """Simple yes/no confirmation."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._msg = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Static("Confirm", id="modal_title")
+            yield Static(self._msg, id="confirm_msg")
+            with Horizontal(id="modal_btns"):
+                yield Button("Yes",    variant="error",   id="btn_yes")
+                yield Button("Cancel", variant="default", id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn_yes")
+
+
+class FilePickerScreen(ModalScreen):
+    """Popup file/directory picker – replaces left-sidebar trees."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
+
+    def __init__(self, mode: str, start: Path | None = None, filename: str = "") -> None:
+        super().__init__()
+        self._mode     = mode          # "open" | "save" | "logs"
+        self._start    = start or Path.home()
+        self._filename = filename
+        self._cur_dir: Path = self._start
+
+    def compose(self) -> ComposeResult:
+        titles = {
+            "open": "Open Process",
+            "save": "Save Process As",
+            "logs": "Browse Logs",
+        }
+        with Vertical(id="fp_box"):
+            yield Static(titles[self._mode], id="fp_title")
+            yield Static(str(self._start), id="fp_path")
+            if self._mode == "open":
+                yield ProcessFileTree(self._start, id="fp_tree")
+            elif self._mode == "save":
+                yield DirOnlyTree(self._start, id="fp_tree")
+                yield Label("Filename")
+                yield Input(value=self._filename, placeholder="process.prcss", id="fp_name")
+            elif self._mode == "logs":
+                yield LogFileTree(self._start, id="fp_tree")
+            with Horizontal(id="fp_btns"):
+                if self._mode == "save":
+                    yield Button("Save", variant="primary", id="fp_ok")
+                yield Button("Cancel", variant="default", id="fp_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "fp_cancel":
+            self.dismiss(None)
+        elif event.button.id == "fp_ok":
+            self._submit_save()
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        path = Path(str(event.path))
+        if self._mode in ("open", "logs"):
+            self.dismiss(path)
+        elif self._mode == "save":
+            self._cur_dir = path.parent
+            self.query_one("#fp_path", Static).update(str(self._cur_dir))
+            self.query_one("#fp_name", Input).value = path.stem
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        self._cur_dir = Path(str(event.path))
+        self.query_one("#fp_path", Static).update(str(self._cur_dir))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit_save()
+
+    def _submit_save(self) -> None:
+        name = self.query_one("#fp_name", Input).value.strip()
+        if not name:
+            return
+        if not name.endswith(".prcss"):
+            name += ".prcss"
+        self.dismiss(self._cur_dir / name)
+
+
+# ── Main Application ──────────────────────────────────────────────────────────
+
+class VeriTrakkApp(App):
+    CSS_PATH  = "veritrakk.tcss"
+    TITLE     = "VeriTrakk"
+    SUB_TITLE = "Westbound Designs"
 
     ENABLE_COMMAND_PALETTE = False
+
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        # Run-mode step actions
+        Binding("right", "complete_step",   "Complete",  show=False, priority=True),
+        Binding("left",  "uncomplete_step", "Un-do",     show=False, priority=True),
+        Binding("n",     "note_step",       "Note",      show=True),
+        # Build-mode actions
+        Binding("a",      "add_step",     "Add Step", show=False),
+        Binding("s",      "add_sub_step", "Add Sub",  show=False),
+        Binding("e",      "edit_step",    "Edit",     show=False),
+        Binding("d",      "delete_step",  "Delete",   show=False),
+        Binding("ctrl+s", "save_build",   "Save",     show=False),
+        # Global
+        Binding("escape", "go_back", "Back", show=True),
+        Binding("q",      "quit",    "Quit", show=True),
     ]
 
-    CSS_PATH = "veritrakk.tcss"
+    # ── Internal state ────────────────────────────────────────────────────────
+    _mode:              str           = "home"
+    _process:           Process | None = None
+    _proc_path:         Path    | None = None
+    _build_proc:        Process | None = None
+    _build_dir:         Path    | None = None
+    _build_path:        Path    | None = None  # set when editing an existing file
+    _pending_thresh_idx: int           = -1
 
-    SCREENS = {
-        "main_screen": MainScreen,
-    }
+    # ── Layout ────────────────────────────────────────────────────────────────
+    def compose(self) -> ComposeResult:
+        yield Header()
 
+        with Horizontal(id="toolbar"):
+            yield Button("New",    id="btn_new",    classes="toolbar_btn")
+            yield Button("Open",   id="btn_open",   classes="toolbar_btn")
+            yield Button("Resume", id="btn_resume", classes="toolbar_btn")
+            yield Button("Build",  id="btn_build",  classes="toolbar_btn")
+            yield Button("Logs",   id="btn_logs",   classes="toolbar_btn")
+            yield Static("", id="status_bar")
+
+        with Horizontal(id="main"):
+            # ── Sidebar (mode-driven) ──────────────────────────────────────
+            with ContentSwitcher(id="sidebar", initial="side_home"):
+                # home
+                with Vertical(id="side_home"):
+                    yield Static(
+                        " VeriTrakk\n Process Tracking\n Westbound Designs",
+                        id="logo",
+                    )
+
+                # run
+                with Vertical(id="side_run"):
+                    yield Static("", id="run_name")
+                    yield Static("", id="run_progress")
+                    yield Static("", id="run_step_info")
+
+                # build
+                with Vertical(id="side_build"):
+                    yield Static("Building process:", id="side_build_title")
+                    yield Static("", id="build_file_label")
+
+            # ── Content area ───────────────────────────────────────────────
+            with ContentSwitcher(id="content", initial="view_home"):
+                # home
+                with VerticalScroll(id="view_home"):
+                    yield Markdown(WELCOME_MD, id="home_md")
+
+                # run: process tree
+                with Vertical(id="view_run"):
+                    yield Tree("", id="process_tree")
+
+                # build: toolbar + builder tree
+                with Vertical(id="view_build"):
+                    with Horizontal(id="build_toolbar"):
+                        yield Input(placeholder="Process name...", id="build_name_inp")
+                        yield Button("+ Step",  id="btn_add_step",  variant="success", classes="build_btn")
+                        yield Button("+ Sub",   id="btn_add_sub",   variant="success", classes="build_btn")
+                        yield Button("Edit",    id="btn_edit_step", variant="default", classes="build_btn")
+                        yield Button("Delete",  id="btn_del_step",  variant="error",   classes="build_btn")
+                        yield Button("Save",    id="btn_save_proc", variant="primary", classes="build_btn")
+                    yield Tree("New Process", id="builder_tree")
+
+                # logs viewer
+                with Vertical(id="view_logs"):
+                    yield Log(id="log_output", auto_scroll=False)
+
+        yield Footer()
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
     def on_mount(self) -> None:
-        self.push_screen(MainScreen())
+        proc_tree = self.query_one("#process_tree", Tree)
+        proc_tree.auto_expand = False
+        proc_tree.root.expand()
+        build_tree = self.query_one("#builder_tree", Tree)
+        build_tree.auto_expand = False
+        build_tree.root.expand()
+        self._show_home()
 
-app = veritrakk()
-veritrakk().run()
+    # ── Mode management ───────────────────────────────────────────────────────
+    def _set_mode(self, mode: str) -> None:
+        self._mode = mode
+        mode_map = {
+            "build": "btn_build",
+            "logs":  "btn_logs",
+        }
+        for btn_id in ("btn_new", "btn_open", "btn_resume", "btn_build", "btn_logs"):
+            self.query_one(f"#{btn_id}", Button).remove_class("active_mode")
+        if mode in mode_map:
+            self.query_one(f"#{mode_map[mode]}", Button).add_class("active_mode")
+        self.refresh_bindings()
+
+    def _switch(self, sidebar: str, content: str) -> None:
+        self.query_one("#sidebar", ContentSwitcher).current = sidebar
+        self.query_one("#content",  ContentSwitcher).current = content
+
+    # ── Show methods ──────────────────────────────────────────────────────────
+    def _show_home(self) -> None:
+        self._set_mode("home")
+        self._switch("side_home", "view_home")
+        self.query_one("#status_bar", Static).update("")
+
+    def _open_picker(self) -> None:
+        start = self._build_dir or Path.home()
+        self.push_screen(
+            FilePickerScreen("open", start=start),
+            callback=lambda path: self._load_process(path) if path else None,
+        )
+
+    def _logs_picker(self) -> None:
+        self.push_screen(
+            FilePickerScreen("logs", start=Path.home()),
+            callback=self._on_logs_selected,
+        )
+
+    def _on_logs_selected(self, path: Path | None) -> None:
+        if path is None:
+            return
+        if path.suffix == ".prcsslog":
+            self._set_mode("logs")
+            self._view_log(path)
+        elif path.suffix == ".prcss" and "#COMPLETE" in path.name:
+            self.push_screen(
+                ConfirmScreen(
+                    f"Publish and dissolve:\n{path.name}\n\n"
+                    "This will write a .prcsslog and delete the source file."
+                ),
+                callback=lambda confirmed: self._do_dissolve(path) if confirmed else None,
+            )
+
+    def _show_run(self) -> None:
+        self._set_mode("run")
+        self._switch("side_run", "view_run")
+        self._rebuild_proc_tree()
+        self._refresh_run_sidebar()
+        self._refresh_status()
+        self.query_one("#process_tree", Tree).focus()
+
+    def _show_build(self, existing_path: Path | None = None) -> None:
+        self._set_mode("build")
+        if existing_path is not None:
+            try:
+                self._build_proc = load_process(existing_path)
+            except Exception:
+                return
+            self._build_path = existing_path
+            self._build_dir  = existing_path.parent
+        else:
+            self._build_path = None
+            self._build_proc = Process(name="New Process")
+
+        self.query_one("#build_name_inp", Input).value = self._build_proc.name
+        self._rebuild_builder_tree()
+        self._update_build_file_label()
+        self._switch("side_build", "view_build")
+        self._refresh_status()
+        self.query_one("#build_name_inp", Input).focus()
+
+    # ── Button handling ───────────────────────────────────────────────────────
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+
+        # Toolbar
+        if bid == "btn_new":
+            self._start_new_process(); return
+        if bid == "btn_open":
+            self._open_picker(); return
+        if bid == "btn_resume":
+            self._resume(); return
+        if bid == "btn_build":
+            self._pick_build_target(); return
+        if bid == "btn_logs":
+            self._logs_picker(); return
+
+        # Builder toolbar
+        if bid == "btn_add_step":
+            self.action_add_step(); return
+        if bid == "btn_add_sub":
+            self.action_add_sub_step(); return
+        if bid == "btn_edit_step":
+            self.action_edit_step(); return
+        if bid == "btn_del_step":
+            self.action_delete_step(); return
+        if bid == "btn_save_proc":
+            self.action_save_build(); return
+
+    # ── New / Open / Resume / Build flows ─────────────────────────────────────
+    def _start_new_process(self) -> None:
+        self._build_path = None
+        self._build_proc = Process(name="New Process")
+        self._show_build()
+
+    def _pick_build_target(self) -> None:
+        if self._process and self._proc_path:
+            self._show_build(existing_path=self._proc_path)
+        else:
+            self._open_picker()
+
+    def _resume(self) -> None:
+        sess = load_session()
+        if not sess:
+            return
+        directory, file_name = sess
+        path = directory / file_name
+        if not path.exists():
+            return
+        self._load_process(path)
+
+    def _load_process(self, file_path: Path) -> None:
+        try:
+            proc = load_process(file_path)
+        except OSError as exc:
+            return
+        self._process   = proc
+        self._proc_path = file_path
+        self._build_dir = file_path.parent
+        save_session(file_path.parent, file_path.name)
+        self._show_run()
+
+    # ── Process tree (run mode) ───────────────────────────────────────────────
+    def _rebuild_proc_tree(self) -> None:
+        if not self._process:
+            return
+        proc = self._process
+        tree = self.query_one("#process_tree", Tree)
+
+        # Remember which top-level step indices are currently collapsed
+        # so we can restore the user's expand/collapse state after the rebuild.
+        collapsed: set[int] = set()
+        for node in tree.root.children:
+            if node.data is not None and not node.is_expanded:
+                collapsed.add(node.data)
+
+        root_label = Text(proc.name)
+        if proc.completed:
+            root_label.stylize("bold green")
+        else:
+            root_label.stylize(f"bold {_SALMON}")
+        tree.reset(root_label)
+        tree.root.data = None
+
+        i = 0
+        while i < len(proc.steps):
+            step = proc.steps[i]
+            if step.level != 1:
+                i += 1
+                continue
+
+            # Find span of sub-steps
+            j = i + 1
+            while j < len(proc.steps) and proc.steps[j].level == 2:
+                j += 1
+
+            if j > i + 1:  # has sub-steps
+                sub_steps = proc.steps[i + 1:j]
+                sub_done  = sum(1 for s in sub_steps if s.completed)
+                sub_total = j - i - 1
+                should_expand = i not in collapsed
+                node = tree.root.add(
+                    _step_label(step, sub_done=sub_done, sub_total=sub_total),
+                    data=i, expand=should_expand,
+                )
+                for k in range(i + 1, j):
+                    node.add_leaf(_step_label(proc.steps[k]), data=k)
+            else:
+                tree.root.add_leaf(_step_label(step), data=i)
+
+            i = j
+
+        tree.root.expand()
+
+    def _refresh_run_sidebar(self) -> None:
+        if not self._process:
+            return
+        proc = self._process
+        pct  = proc.progress_pct
+
+        name_t = Text(proc.name, style=f"bold {_SALMON}")
+        self.query_one("#run_name", Static).update(name_t)
+
+        prog_t = Text()
+        prog_t.append(f"{_progress_bar(pct)}\n", style=_GREEN)
+        prog_t.append(f"{proc.done_top}/{proc.total_top} steps  ", style=_KHAKI)
+        prog_t.append(f"{pct:.0f}%", style=_GOLD)
+        self.query_one("#run_progress", Static).update(prog_t)
+
+    def _refresh_status(self) -> None:
+        bar = self.query_one("#status_bar", Static)
+        if self._mode == "run" and self._process:
+            proc = self._process
+            pct  = proc.progress_pct
+            t = Text("  ")
+            t.append(proc.name, style=f"bold {_SALMON}")
+            t.append(f"  {proc.done_top}/{proc.total_top}", style=_KHAKI)
+            t.append(f"  {_progress_bar(pct, 12)}", style=_GREEN)
+            t.append(f"  {pct:.0f}%", style=_GOLD)
+            bar.update(t)
+        elif self._mode == "build" and self._build_proc:
+            t = Text("  ")
+            t.append("BUILDER", style=f"bold {_SALMON}")
+            t.append(f"  {self._build_proc.name}", style=_KHAKI)
+            bar.update(t)
+        else:
+            bar.update("")
+
+    def _update_step_info(self) -> None:
+        tree = self.query_one("#process_tree", Tree)
+        info = self.query_one("#run_step_info", Static)
+        node = tree.cursor_node
+        if node is None or node.data is None or not self._process:
+            info.update("")
+            return
+        step = self._process.steps[node.data]
+        t = Text()
+        # Step label
+        t.append(step.label + "\n", style=f"bold {_SALMON}")
+        # Status
+        if step.completed:
+            if step.result == "PASS":
+                t.append("\u2713 PASS\n", style=f"bold {_GREEN}")
+            elif step.result == "FAIL":
+                t.append("\u2717 FAIL\n", style="bold red")
+            else:
+                ts = ""
+                if step.completed_at:
+                    try:
+                        dt = datetime.fromisoformat(step.completed_at)
+                        ts = f"  {dt.strftime('%H:%M')}"
+                    except ValueError:
+                        pass
+                t.append(f"\u2713 Done{ts}\n", style=_GREEN)
+        else:
+            t.append("\u25cb Pending\n", style="dim")
+        # Note
+        if step.note:
+            t.append("\nNote\n", style="dim")
+            t.append(step.note, style=_KHAKI)
+        # Threshold
+        if step.has_threshold():
+            parts: list[str] = []
+            if step.threshold_upper:
+                parts.append(f"Upper \u2264 {step.threshold_upper}")
+            if step.threshold_lower:
+                parts.append(f"Lower \u2265 {step.threshold_lower}")
+            t.append("\nThreshold\n", style="dim")
+            t.append("\n".join(parts), style=_TEAL)
+        info.update(t)
+
+    # ── Run-mode bindings ─────────────────────────────────────────────────────
+    def action_complete_step(self) -> None:
+        if self._mode != "run" or not self._process:
+            return
+        tree = self.query_one("#process_tree", Tree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+        step_idx = node.data
+        step     = self._process.steps[step_idx]
+        if step.completed:
+            return
+        # Parent node: require sub-steps to be completed first
+        if node.children:
+            return
+
+        if step.has_threshold():
+            self._pending_thresh_idx = step_idx
+            self.push_screen(
+                ThresholdScreen(step.label, step.threshold_upper, step.threshold_lower),
+                callback=self._on_threshold_result,
+            )
+        else:
+            self._do_complete(step_idx)
+
+    def _on_threshold_result(self, value_str: str | None) -> None:
+        if value_str is None or self._pending_thresh_idx < 0:
+            return
+        step_idx = self._pending_thresh_idx
+        step     = self._process.steps[step_idx]
+        try:
+            value = float(value_str)
+        except ValueError:
+            return
+
+        try:
+            ut = float(step.threshold_upper) if step.threshold_upper else None
+        except ValueError:
+            ut = None
+        try:
+            lt = float(step.threshold_lower) if step.threshold_lower else None
+        except ValueError:
+            lt = None
+
+        passed = (ut is None or value <= ut) and (lt is None or value >= lt)
+        result = "PASS" if passed else "FAIL"
+        sev    = "information" if passed else "warning"
+        self._do_complete(step_idx, result=result)
+
+    def _do_complete(self, step_idx: int, result: str = "") -> None:
+        proc = self._process
+        step = proc.steps[step_idx]
+        step.completed    = True
+        step.completed_at = datetime.now().isoformat()
+        step.result       = result
+
+        # Auto-complete parent if all siblings are done
+        if step.level == 2:
+            parent_idx = proc.parent_of(step_idx)
+            if parent_idx is not None:
+                subs = proc.sub_steps_of(parent_idx)
+                if all(s.completed for _, s in subs):
+                    parent = proc.steps[parent_idx]
+                    parent.completed    = True
+                    parent.completed_at = datetime.now().isoformat()
+
+        # Check if the whole process is done
+        if proc.is_fully_complete() and not proc.completed:
+            proc.completed    = True
+            proc.completed_at = datetime.now().isoformat()
+            self._mark_complete_file()
+
+        save_process(proc, self._proc_path)
+        self._rebuild_proc_tree()
+        self._refresh_run_sidebar()
+        self._refresh_status()
+
+    def action_uncomplete_step(self) -> None:
+        if self._mode != "run" or not self._process:
+            return
+        tree = self.query_one("#process_tree", Tree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+        step_idx = node.data
+        proc     = self._process
+        step     = proc.steps[step_idx]
+        if not step.completed:
+            return
+
+        # Block uncomplete on a parent step if all its sub-steps are still done.
+        # The user must undo a child first.
+        if step.level == 1:
+            subs = proc.sub_steps_of(step_idx)
+            if subs and all(s.completed for _, s in subs):
+                return
+
+        step.completed    = False
+        step.completed_at = ""
+        step.result       = ""
+
+        # Un-complete parent if it was auto-completed
+        if step.level == 2:
+            parent_idx = proc.parent_of(step_idx)
+            if parent_idx is not None:
+                parent = proc.steps[parent_idx]
+                parent.completed    = False
+                parent.completed_at = ""
+
+        if proc.completed:
+            proc.completed    = False
+            proc.completed_at = ""
+            self._unmark_complete_file()
+
+        save_process(proc, self._proc_path)
+        self._rebuild_proc_tree()
+        self._refresh_run_sidebar()
+        self._refresh_status()
+
+    def action_note_step(self) -> None:
+        if self._mode != "run" or not self._process:
+            return
+        tree = self.query_one("#process_tree", Tree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+        step_idx = node.data
+        self.push_screen(
+            NoteScreen(current_note=self._process.steps[step_idx].note),
+            callback=lambda note: self._on_note_result(step_idx, note),
+        )
+
+    def _on_note_result(self, step_idx: int, note: str | None) -> None:
+        if note is None:
+            return
+        self._process.steps[step_idx].note = note
+        save_process(self._process, self._proc_path)
+        self._rebuild_proc_tree()
+
+    # ── File rename helpers ───────────────────────────────────────────────────
+    def _mark_complete_file(self) -> None:
+        if not self._proc_path or "#COMPLETE" in self._proc_path.name:
+            return
+        new_name = self._proc_path.stem + "#COMPLETE.prcss"
+        new_path = self._proc_path.parent / new_name
+        try:
+            self._proc_path.rename(new_path)
+            self._proc_path = new_path
+            save_session(new_path.parent, new_path.name)
+        except OSError:
+            pass
+
+    def _unmark_complete_file(self) -> None:
+        if not self._proc_path or "#COMPLETE" not in self._proc_path.name:
+            return
+        new_name = self._proc_path.name.replace("#COMPLETE.prcss", ".prcss")
+        new_path = self._proc_path.parent / new_name
+        try:
+            self._proc_path.rename(new_path)
+            self._proc_path = new_path
+            save_session(new_path.parent, new_path.name)
+        except OSError:
+            pass
+
+    # ── Builder actions ───────────────────────────────────────────────────────
+    def _rebuild_builder_tree(self) -> None:
+        if not self._build_proc:
+            return
+        proc = self._build_proc
+        tree = self.query_one("#builder_tree", Tree)
+        tree.reset(Text(proc.name, style=f"bold {_SALMON}"))
+        tree.root.data = None
+
+        i = 0
+        while i < len(proc.steps):
+            step = proc.steps[i]
+            if step.level != 1:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(proc.steps) and proc.steps[j].level == 2:
+                j += 1
+            if j > i + 1:
+                node = tree.root.add(_builder_label(step), data=i, expand=True)
+                for k in range(i + 1, j):
+                    node.add_leaf(_builder_label(proc.steps[k]), data=k)
+            else:
+                tree.root.add_leaf(_builder_label(step), data=i)
+            i = j
+
+        tree.root.expand()
+
+    def _focused_build_idx(self) -> int | None:
+        node = self.query_one("#builder_tree", Tree).cursor_node
+        return None if (node is None or node.data is None) else node.data
+
+    def action_add_step(self) -> None:
+        if self._mode != "build":
+            return
+        self.push_screen(
+            StepScreen(title="Add Top-Level Step"),
+            callback=self._on_add_step,
+        )
+
+    def _on_add_step(self, data: dict | None) -> None:
+        if data is None or not self._build_proc:
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is not None:
+            insert_at = cur_idx + 1
+            while (insert_at < len(self._build_proc.steps)
+                   and self._build_proc.steps[insert_at].level == 2):
+                insert_at += 1
+        else:
+            insert_at = len(self._build_proc.steps)
+        self._build_proc.steps.insert(insert_at, Step(
+            label=data["label"], level=1,
+            note=data["note"],
+            threshold_upper=data["threshold_upper"],
+            threshold_lower=data["threshold_lower"],
+        ))
+        self._rebuild_builder_tree()
+        self.query_one("#builder_tree", Tree).focus()
+
+    def action_add_sub_step(self) -> None:
+        if self._mode != "build":
+            return
+        self.push_screen(
+            StepScreen(title="Add Sub-Step"),
+            callback=self._on_add_sub,
+        )
+
+    def _on_add_sub(self, data: dict | None) -> None:
+        if data is None or not self._build_proc:
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is None:
+            return
+        proc = self._build_proc
+        step = proc.steps[cur_idx]
+        if step.level == 2:
+            insert_at = cur_idx + 1
+        else:
+            insert_at = cur_idx + 1
+            while insert_at < len(proc.steps) and proc.steps[insert_at].level == 2:
+                insert_at += 1
+        proc.steps.insert(insert_at, Step(
+            label=data["label"], level=2,
+            note=data["note"],
+            threshold_upper=data["threshold_upper"],
+            threshold_lower=data["threshold_lower"],
+        ))
+        self._rebuild_builder_tree()
+        self.query_one("#builder_tree", Tree).focus()
+
+    def action_edit_step(self) -> None:
+        if self._mode != "build":
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is None:
+            return
+        step = self._build_proc.steps[cur_idx]
+        self.push_screen(
+            StepScreen(existing=step, title="Edit Step"),
+            callback=lambda d: self._on_edit_step(cur_idx, d),
+        )
+
+    def _on_edit_step(self, step_idx: int, data: dict | None) -> None:
+        if data is None or not self._build_proc:
+            return
+        step = self._build_proc.steps[step_idx]
+        step.label           = data["label"]
+        step.note            = data["note"]
+        step.threshold_upper = data["threshold_upper"]
+        step.threshold_lower = data["threshold_lower"]
+        self._rebuild_builder_tree()
+
+    def action_delete_step(self) -> None:
+        if self._mode != "build":
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is None:
+            return
+        proc = self._build_proc
+        step = proc.steps[cur_idx]
+        if step.level == 1:
+            end = cur_idx + 1
+            while end < len(proc.steps) and proc.steps[end].level == 2:
+                end += 1
+            del proc.steps[cur_idx:end]
+        else:
+            del proc.steps[cur_idx]
+        self._rebuild_builder_tree()
+        self.query_one("#builder_tree", Tree).focus()
+
+    def action_save_build(self) -> None:
+        if self._mode != "build" or not self._build_proc:
+            return
+        name = self.query_one("#build_name_inp", Input).value.strip()
+        if name:
+            self._build_proc.name = name
+        if self._build_path:
+            # Editing an existing file — save in place
+            self._do_save_build(self._build_path)
+        else:
+            # New process — ask where to save
+            start = self._build_dir or Path.home()
+            suggested = sanitize_filename(self._build_proc.name)
+            self.push_screen(
+                FilePickerScreen("save", start=start, filename=suggested),
+                callback=self._on_save_dialog,
+            )
+
+    def _on_save_dialog(self, path: Path | None) -> None:
+        if path is None:
+            return
+        self._build_path = path
+        self._build_dir  = path.parent
+        self._do_save_build(path)
+
+    def _do_save_build(self, save_path: Path) -> None:
+        try:
+            save_process(self._build_proc, save_path)
+            save_session(save_path.parent, save_path.name)
+            self._proc_path = save_path
+            self._process   = self._build_proc
+        except OSError:
+            return
+        self._update_build_file_label()
+        self._refresh_status()
+
+    # ── Builder input sync ────────────────────────────────────────────────────
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "build_name_inp" and self._build_proc:
+            self._build_proc.name = event.value
+            tree = self.query_one("#builder_tree", Tree)
+            tree.root.set_label(Text(event.value, style=f"bold {_SALMON}"))
+
+    # ── Directory/file selection ──────────────────────────────────────────────
+    def _update_build_file_label(self) -> None:
+        label = self.query_one("#build_file_label", Static)
+        if self._build_path:
+            label.update(self._build_path.name)
+        else:
+            label.update("New (unsaved)")
+
+    # ── Log viewer ────────────────────────────────────────────────────────────
+    def _view_log(self, file_path: Path) -> None:
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return
+        log = self.query_one("#log_output", Log)
+        log.clear()
+        for line in text.splitlines():
+            log.write_line(line)
+        self.query_one("#content", ContentSwitcher).current = "view_logs"
+        log_label = Text("  LOG  ", style="dim")
+        log_label.append(file_path.name, style=f"bold {_SALMON}")
+        self.query_one("#status_bar", Static).update(log_label)
+
+    def _do_dissolve(self, file_path: Path) -> None:
+        try:
+            proc     = load_process(file_path)
+            log_path = publish_process(proc, file_path)
+            sess = load_session()
+            if sess and sess[0] == file_path.parent and sess[1] == file_path.name:
+                save_session(file_path.parent, "")
+            self._set_mode("logs")
+            self._view_log(log_path)
+        except OSError:
+            pass
+
+    # ── Tree cursor events ────────────────────────────────────────────────────
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        if event.node.tree.id == "process_tree":
+            self._update_step_info()
+
+    # ── Binding guards ────────────────────────────────────────────────────────
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action in ("complete_step", "uncomplete_step", "note_step"):
+            return self._mode == "run"
+        if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
+            return self._mode == "build" and not isinstance(self.focused, Input)
+        if action == "save_build":
+            return self._mode == "build"
+        return True
+
+    # ── Global back / quit ────────────────────────────────────────────────────
+    def action_go_back(self) -> None:
+        self._show_home()
+

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Windows reserved device name (created accidentally by bash redirects)
+/nul
+
+# Local data (session state, logs)
+data/session.json
+data/root.txt
+data/logs/

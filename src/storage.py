@@ -1,326 +1,331 @@
-from asyncio.windows_events import NULL
-from pathlib import Path
-from tkinter.tix import Select
-from datetime import datetime
+"""
+VeriTrakk  -  storage.py
+Clean CSV-based data model replacing the old tag-string format.
+Legacy .prcss files are auto-detected and converted on load.
+"""
+from __future__ import annotations
+
+import csv
+import json
 import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 
-working_dir = Path.cwd()
-data_dir = working_dir / 'data'
+# ── Paths ─────────────────────────────────────────────────────────────────────
+_APP_ROOT    = Path(__file__).resolve().parent.parent
+DATA_DIR     = _APP_ROOT / "data"
+LOGS_DIR     = DATA_DIR / "logs"
+SESSION_FILE = DATA_DIR / "session.json"
 
-prcss_files = []
-file_names = []
 
-def save_root(new_root, file_name):
-    with open(data_dir / "root.txt", 'w') as f:
-        f.writelines(new_root)
-        f.writelines("\n" + file_name)
+# ── Data Model ────────────────────────────────────────────────────────────────
 
-def read_root_and_file():
-    with open(data_dir / "root.txt", 'r') as f:
-        c_and_f = f.readlines()
-    return c_and_f
+@dataclass
+class Step:
+    label: str
+    level: int                # 1 = top-level step, 2 = sub-step
+    completed: bool = False
+    completed_at: str = ""    # ISO-8601 string
+    note: str = ""
+    threshold_upper: str = ""
+    threshold_lower: str = ""
+    result: str = ""          # "PASS" | "FAIL" | ""
 
-def has_child(list,item):
-    index = list.index(item)
+    def has_threshold(self) -> bool:
+        return bool(self.threshold_upper or self.threshold_lower)
+
+
+@dataclass
+class Process:
+    name: str
+    steps: list[Step] = field(default_factory=list)
+    completed: bool = False
+    completed_at: str = ""
+
+    @property
+    def top_steps(self) -> list[tuple[int, Step]]:
+        """(global_index, step) for every level-1 step."""
+        return [(i, s) for i, s in enumerate(self.steps) if s.level == 1]
+
+    @property
+    def total_top(self) -> int:
+        return sum(1 for s in self.steps if s.level == 1)
+
+    @property
+    def done_top(self) -> int:
+        return sum(1 for s in self.steps if s.level == 1 and s.completed)
+
+    @property
+    def progress_pct(self) -> float:
+        return (self.done_top / self.total_top * 100) if self.total_top else 0.0
+
+    def is_fully_complete(self) -> bool:
+        tops = [s for s in self.steps if s.level == 1]
+        return bool(tops) and all(s.completed for s in tops)
+
+    def sub_steps_of(self, top_idx: int) -> list[tuple[int, Step]]:
+        """Return (global_index, step) for sub-steps belonging to top_idx."""
+        result: list[tuple[int, Step]] = []
+        for i in range(top_idx + 1, len(self.steps)):
+            if self.steps[i].level == 1:
+                break
+            result.append((i, self.steps[i]))
+        return result
+
+    def parent_of(self, sub_idx: int) -> int | None:
+        """Return the global index of the parent top-level step for a sub-step."""
+        for i in range(sub_idx - 1, -1, -1):
+            if self.steps[i].level == 1:
+                return i
+        return None
+
+
+# ── CSV I/O ───────────────────────────────────────────────────────────────────
+
+_FIELDS = [
+    "level", "label", "completed", "completed_at",
+    "note", "threshold_upper", "threshold_lower", "result",
+]
+
+
+def save_process(proc: Process, file_path: Path) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(file_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=_FIELDS)
+        w.writeheader()
+        w.writerow({
+            "level": 0, "label": proc.name,
+            "completed": proc.completed, "completed_at": proc.completed_at,
+            "note": "", "threshold_upper": "", "threshold_lower": "", "result": "",
+        })
+        for s in proc.steps:
+            w.writerow({
+                "level": s.level, "label": s.label,
+                "completed": s.completed, "completed_at": s.completed_at,
+                "note": s.note,
+                "threshold_upper": s.threshold_upper,
+                "threshold_lower": s.threshold_lower,
+                "result": s.result,
+            })
+
+
+def load_process(file_path: Path) -> Process:
+    """Load a .prcss file -- tries new CSV format first, falls back to legacy."""
     try:
-        if "[>]" in list[index + 1] and "[>]" not in list[index]:
-            return True
-        else:
-            return False
-    except IndexError:
-        return False
- 
-def file_parser_selected(new_path):
-    file_names = []
-    files = list(new_path.glob("*.prcss"))    
+        return _load_csv(file_path)
+    except Exception:
+        return _load_legacy(file_path)
 
-    for x in files:
-        file_names.append(x.name)
 
-    return file_names
+def _load_csv(file_path: Path) -> Process:
+    with open(file_path, "r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    if not rows or "level" not in rows[0]:
+        raise ValueError("Not a CSV process file")
+    root = rows[0]
+    proc = Process(
+        name=root["label"],
+        completed=root.get("completed", "false").lower() == "true",
+        completed_at=root.get("completed_at", ""),
+    )
+    for row in rows[1:]:
+        proc.steps.append(Step(
+            label=row["label"],
+            level=int(row.get("level", 1)),
+            completed=row.get("completed", "false").lower() == "true",
+            completed_at=row.get("completed_at", ""),
+            note=row.get("note", ""),
+            threshold_upper=row.get("threshold_upper", ""),
+            threshold_lower=row.get("threshold_lower", ""),
+            result=row.get("result", ""),
+        ))
+    return proc
 
-def file_parser():
-    files = list(data_dir.glob("*.prcss"))    
 
-    for x in files:
-        file_names.append(x.name)
+def _load_legacy(file_path: Path) -> Process:
+    """Parse the original tag-based .prcss format and convert to the new model."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-    return file_names
-        
-def file_reader(path,file_name):
-        with open(path / file_name, 'r') as f:
-            data = f.readlines()
-        return data
+    def _strip(s: str) -> str:
+        s = re.sub(r'\|\[d=[^\]]*\]', '', s)
+        s = re.sub(r'\|\[n=[^\]]*\]', '', s)
+        s = re.sub(r'\[UT=[^\]]*\]', '', s)
+        s = re.sub(r'\[LT=[^\]]*\]', '', s)
+        s = re.sub(r'\[PASS\]|\[FAIL\]', '', s)
+        return s.replace("[S]|", "").replace("[>]|", "").strip()
 
-def number_of_files(files):
-    count = 0
-    for x in files:
-        count = count + 1
-    return count
+    def _note(s: str) -> str:
+        m = re.search(r'\|\[n=([^\]]*)\]', s)
+        return m.group(1) if m else ""
 
-def strip_date_tag(s: str) -> str:
-    """Remove |[d=...] completion timestamp from a line string."""
-    return re.sub(r'\|\[d=[^\]]*\]', '', s)
+    def _thresh(s: str) -> tuple[str, str]:
+        ut = re.search(r'\[UT=([^\]]*)\]', s)
+        lt = re.search(r'\[LT=([^\]]*)\]', s)
+        return (ut.group(1) if ut else ""), (lt.group(1) if lt else "")
 
-def strip_note_tag(s: str) -> str:
-    """Remove |[n=...] note from a line string."""
-    idx = s.find('|[n=')
-    if idx != -1:
-        return s[:idx]
-    return s
+    def _ts(s: str) -> str:
+        m = re.search(r'\|\[d=([^\]]*)\]', s)
+        if not m:
+            return ""
+        try:
+            return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S").isoformat()
+        except ValueError:
+            return m.group(1)
 
-def get_note_from_line(s: str) -> str:
-    """Extract note content from a raw line string."""
-    idx = s.find('|[n=')
-    if idx != -1:
-        after = s[idx + 4:]
-        end = after.rfind(']')
-        if end != -1:
-            return after[:end]
-    return ""
+    if not lines:
+        return Process(name="Unnamed Process")
 
-def get_note_for_label(label: str, path, file_name: str) -> str:
-    """Return the saved note for the given label, or '' if none."""
-    try:
-        with open(path / file_name, 'r') as f:
-            data = f.readlines()
-    except OSError:
-        return ""
-    for line in data:
-        stripped = line.strip()
-        stripped_no_date = strip_date_tag(stripped)
-        stripped_no_note = strip_note_tag(stripped_no_date)
-        if "[>]" in stripped_no_note:
-            clean = stripped_no_note.replace("[S]|", "").replace("[>]|", "").strip()
-        else:
-            clean = stripped_no_note.replace("[S]|", "").strip()
-        if clean == label:
-            return get_note_from_line(stripped)
-    return ""
-
-def read_all_notes(path, file_name) -> dict:
-    """Return a dict mapping clean label -> note for all lines in the file that have notes."""
-    notes = {}
-    try:
-        with open(path / file_name, 'r') as f:
-            data = f.readlines()
-    except OSError:
-        return notes
-    for line in data:
-        stripped = line.strip()
-        note = get_note_from_line(stripped)
-        if not note:
+    root_raw = lines[0].strip()
+    proc = Process(
+        name=_strip(root_raw),
+        completed="[S]|" in root_raw,
+        completed_at=_ts(root_raw),
+    )
+    for line in lines[1:]:
+        raw = line.strip()
+        if not raw:
             continue
-        stripped_no_date = strip_date_tag(stripped)
-        stripped_no_note = strip_note_tag(stripped_no_date)
-        if "[>]" in stripped_no_note:
-            clean = stripped_no_note.replace("[S]|", "").replace("[>]|", "").strip()
-        else:
-            clean = stripped_no_note.replace("[S]|", "").strip()
-        if clean:
-            notes[clean] = note
-    return notes
+        pf = re.search(r'\[(PASS|FAIL)\]', raw)
+        ut, lt = _thresh(raw)
+        proc.steps.append(Step(
+            label=_strip(raw),
+            level=2 if "[>]|" in raw else 1,
+            completed="[S]|" in raw,
+            completed_at=_ts(raw),
+            note=_note(raw),
+            threshold_upper=ut,
+            threshold_lower=lt,
+            result=pf.group(1) if pf else "",
+        ))
+    return proc
 
-def set_note(label: str, note: str, path, file_name: str) -> None:
-    """Set or clear the note for the given label in the .prcss file."""
-    with open(path / file_name, 'r') as f:
-        data = f.readlines()
-    modified_data = []
-    for line in data:
-        stripped = line.strip()
-        stripped_no_date = strip_date_tag(stripped)
-        stripped_no_note = strip_note_tag(stripped_no_date)
-        if "[>]" in stripped_no_note:
-            clean = stripped_no_note.replace("[S]|", "").replace("[>]|", "").strip()
-        else:
-            clean = stripped_no_note.replace("[S]|", "").strip()
-        if clean == label:
-            line_no_note = strip_note_tag(line.rstrip())
-            if note:
-                modified_data.append(f"{line_no_note}|[n={note}]\n")
-            else:
-                modified_data.append(f"{line_no_note}\n")
-        else:
-            modified_data.append(line)
-    with open(path / file_name, 'w') as f:
-        f.writelines(modified_data)
 
-#Appends the [S] status prefix to the specified line in the .prcss file
-def set_S(label, path, file_name):
-    with open(path / file_name, 'r') as f:
-        data = f.readlines()
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+# ── Session persistence ───────────────────────────────────────────────────────
 
-    # Find and modify the line matching the label
-    modified_data = []
-    for line in data:
-        stripped_line = line.strip()
-        stripped_no_date = strip_date_tag(stripped_line)
-        stripped_no_note = strip_note_tag(stripped_no_date)
-        if "[>]" in stripped_line:
-            stripped_no_child = stripped_no_note.replace("[>]|","")
-            if stripped_no_child == label:
-                if "[S]" in line:
-                    modified_data.append(line)
-                else:
-                    modified_data.append(f"[S]|{line.rstrip()}|[d={timestamp}]\n")
-            else:
-                modified_data.append(line)
-
-        elif stripped_no_note == label:
-            # Add [S] prefix with | delimiter
-            if line.startswith("[S]"):
-                # Already has [S], keep as is
-                modified_data.append(line)
-            else:
-                # Add [S] prefix and completion timestamp
-                modified_data.append(f"[S]|{line.rstrip()}|[d={timestamp}]\n")
-        else:
-            modified_data.append(line)
-    
-    # Write back to file
-    with open(path / file_name, 'w') as f:
-        f.writelines(modified_data)
-
-#Returns True if label contains [S] status prefix     
-def has_S(label, file_name):
-    with open(data_dir / file_name, 'r') as f:
-        data = f.readlines()
-    for line in data:
-        stripped_line = line.strip()
-        if "[S]" in stripped_line:
-            return True
-    return False
-
-def remove_S(label, path, file_name):
-    with open(path / file_name, 'r') as f:
-        data = f.readlines()
-    
-    # Find and modify the line matching the label
-    modified_data = []
-    for line in data:
-        stripped_line = line.strip()
-        stripped_no_date = strip_date_tag(stripped_line)
-        stripped_no_note = strip_note_tag(stripped_no_date)
-        if "[>]" in stripped_line:
-            stripped_no_child = stripped_no_note.replace("[>]|","")
-            if stripped_no_child == label:
-                if "[S]" in line:
-                    clean = strip_date_tag(line.replace("[S]|","").rstrip()) + "\n"
-                    modified_data.append(clean)
-                else:
-                    modified_data.append(line)
-            else:
-                modified_data.append(line)
-
-        elif stripped_no_note == label:
-            if "[S]" in stripped_no_note:
-                clean = strip_date_tag(line.replace("[S]|","").rstrip()) + "\n"
-                modified_data.append(clean)
-            else:
-                modified_data.append(line)
-        else:
-            modified_data.append(line)
-    
-    # Write back to file
-    with open(path / file_name, 'w') as f:
-        f.writelines(modified_data)
-
-# ---------------------------------------------------------------------------
-# Threshold tag helpers
-# ---------------------------------------------------------------------------
-
-def get_threshold_from_line(s: str) -> tuple[str, str]:
-    """Return (upper, lower) threshold strings from a raw line, or ('', '') if absent."""
-    ut = ""
-    lt = ""
-    m = re.search(r'\[UT=([^\]]*)\]', s)
-    if m:
-        ut = m.group(1)
-    m = re.search(r'\[LT=([^\]]*)\]', s)
-    if m:
-        lt = m.group(1)
-    return ut, lt
-
-def strip_threshold_tags(s: str) -> str:
-    """Remove [UT=...] and [LT=...] tags from a string."""
-    s = re.sub(r'\[UT=[^\]]*\]', '', s)
-    s = re.sub(r'\[LT=[^\]]*\]', '', s)
-    return s
-
-def read_all_thresholds(path, file_name) -> dict:
-    """Return a dict mapping clean label -> (upper, lower) for lines with threshold tags."""
-    thresholds = {}
+def load_session() -> tuple[Path, str] | None:
     try:
-        with open(path / file_name, 'r') as f:
-            data = f.readlines()
-    except OSError:
-        return thresholds
-    for line in data:
-        stripped = line.strip()
-        ut, lt = get_threshold_from_line(stripped)
-        if not ut and not lt:
+        d = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
+        return Path(d["path"]), d["file"]
+    except Exception:
+        return None
+
+
+def save_session(directory: Path, file_name: str) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SESSION_FILE.write_text(
+        json.dumps({"path": str(directory), "file": file_name}),
+        encoding="utf-8",
+    )
+
+
+# ── File naming ───────────────────────────────────────────────────────────────
+
+def sanitize_filename(name: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*]+', "_", name).strip()
+    return (safe or "new_process") + ".prcss"
+
+
+# ── Log generation / publishing ───────────────────────────────────────────────
+
+def generate_log_text(proc: Process) -> str:
+    W = 64
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines: list[str] = [
+        "=" * W,
+        "  VERITRAKK  -  PROCESS LOG",
+        "=" * W,
+        f"  Process  : {proc.name}",
+        f"  Published: {now}",
+    ]
+    if proc.completed_at:
+        try:
+            dt = datetime.fromisoformat(proc.completed_at)
+            lines.append(f"  Completed: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+        except ValueError:
+            lines.append(f"  Completed: {proc.completed_at}")
+    lines += ["=" * W, ""]
+
+    i = 0
+    while i < len(proc.steps):
+        step = proc.steps[i]
+        if step.level != 1:
+            i += 1
             continue
-        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
-        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
-        if clean:
-            thresholds[clean] = (ut, lt)
-    return thresholds
 
-def get_threshold_for_label(label: str, path, file_name: str) -> tuple[str, str]:
-    """Return (upper, lower) threshold for a given label, or ('', '') if none."""
-    try:
-        with open(path / file_name, 'r') as f:
-            data = f.readlines()
-    except OSError:
-        return "", ""
-    for line in data:
-        stripped = line.strip()
-        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
-        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
-        if clean == label:
-            return get_threshold_from_line(stripped)
-    return "", ""
-
-def set_pass_fail(label: str, result: str, path, file_name: str) -> None:
-    """Write [PASS] or [FAIL] result tag and [S] completion onto the matching line."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with open(path / file_name, 'r') as f:
-        data = f.readlines()
-    modified_data = []
-    for line in data:
-        stripped = line.strip()
-        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
-        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
-        if clean == label:
-            base = line.rstrip()
-            base = re.sub(r'^\[S\]\|', '', base)
-            base = re.sub(r'\|\[d=[^\]]*\]', '', base)
-            base = re.sub(r'\[PASS\]|\[FAIL\]', '', base)
-            base = base.strip()
-            modified_data.append(f"[S]|{base}[{result}]|[d={timestamp}]\n")
+        if step.result:
+            status = f"[{step.result}]  COMPLETE"
+        elif step.completed:
+            status = "COMPLETE"
         else:
-            modified_data.append(line)
-    with open(path / file_name, 'w') as f:
-        f.writelines(modified_data)
+            status = "PENDING"
 
-def remove_pass_fail(label: str, path, file_name: str) -> None:
-    """Remove [S], [PASS]/[FAIL], and date tag from the matching threshold line, restoring it."""
-    with open(path / file_name, 'r') as f:
-        data = f.readlines()
-    modified_data = []
-    for line in data:
-        stripped = line.strip()
-        stripped_clean = strip_threshold_tags(strip_note_tag(strip_date_tag(stripped)))
-        clean = stripped_clean.replace("[S]|", "").replace("[>]|", "").replace("[PASS]", "").replace("[FAIL]", "").strip()
-        if clean == label:
-            base = line.rstrip()
-            base = re.sub(r'^\[S\]\|', '', base)
-            base = re.sub(r'\|\[d=[^\]]*\]', '', base)
-            base = re.sub(r'\[PASS\]|\[FAIL\]', '', base)
-            modified_data.append(f"{base.strip()}\n")
-        else:
-            modified_data.append(line)
-    with open(path / file_name, 'w') as f:
-        f.writelines(modified_data)
+        ts_str = ""
+        if step.completed_at:
+            try:
+                dt = datetime.fromisoformat(step.completed_at)
+                ts_str = f"  {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+            except ValueError:
+                ts_str = f"  {step.completed_at}"
+
+        lines.append(f"  *  {step.label}")
+        lines.append(f"     Status : {status}{ts_str}")
+        if step.note:
+            lines.append(f"     Note   : {step.note}")
+        if step.threshold_upper or step.threshold_lower:
+            parts = []
+            if step.threshold_upper:
+                parts.append(f"UT={step.threshold_upper}")
+            if step.threshold_lower:
+                parts.append(f"LT={step.threshold_lower}")
+            lines.append(f"     Thresh : {', '.join(parts)}")
+
+        j = i + 1
+        while j < len(proc.steps) and proc.steps[j].level == 2:
+            sub = proc.steps[j]
+            if sub.result:
+                sym = f"[{sub.result}]"
+            elif sub.completed:
+                sym = "[DONE]"
+            else:
+                sym = "[    ]"
+            sub_ts = ""
+            if sub.completed_at:
+                try:
+                    dt = datetime.fromisoformat(sub.completed_at)
+                    sub_ts = f"  {dt.strftime('%H:%M:%S')}"
+                except ValueError:
+                    sub_ts = f"  {sub.completed_at}"
+            lines.append(f"        {sym}  {sub.label}{sub_ts}")
+            if sub.note:
+                lines.append(f"               NOTE: {sub.note}")
+            j += 1
+
+        i = j
+        lines.append("")
+
+    lines += [
+        "-" * W,
+        f"  {proc.done_top} / {proc.total_top} top-level steps completed",
+        "=" * W,
+    ]
+    return "\n".join(lines)
+
+
+def publish_process(proc: Process, src_path: Path) -> Path:
+    """Write .prcsslog, copy to data/logs/, delete source. Returns the log path."""
+    log_text = generate_log_text(proc)
+    stem     = src_path.stem.replace("#COMPLETE", "").strip()
+    log_name = stem + ".prcsslog"
+    log_path = src_path.parent / log_name
+
+    log_path.write_text(log_text, encoding="utf-8")
+
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    (LOGS_DIR / log_name).write_text(log_text, encoding="utf-8")
+
+    if src_path.exists():
+        src_path.unlink()
+
+    return log_path
