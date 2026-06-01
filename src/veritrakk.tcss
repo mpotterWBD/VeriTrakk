@@ -63,6 +63,25 @@ Footer {
     content-align: right middle;
 }
 
+#quest_time {
+    margin-left: 2;
+    color: cadetblue;
+    text-style: bold;
+    display: none;
+}
+
+#quest_clock_lbl {
+    margin-left: 1;
+    color: darkkhaki;
+    display: none;
+}
+
+#quest_clock_switch {
+    margin-left: 1;
+    width: auto;
+    display: none;
+}
+
 /* ── Main split ─────────────────────────────────────────── */
 #main {
     height: 1fr;
@@ -271,7 +290,8 @@ Tree > .tree--guides-hover {
 NoteScreen,
 ThresholdScreen,
 StepScreen,
-ConfirmScreen {
+ConfirmScreen,
+NewFileTypeScreen {
     align: center middle;
 }
 
@@ -280,6 +300,15 @@ ConfirmScreen {
     border: double darkseagreen;
     padding: 1 2;
     width: 60;
+    height: auto;
+    max-height: 90%;
+}
+
+#new_file_type_box {
+    background: #181818;
+    border: double darkseagreen;
+    padding: 1 2;
+    width: 78;
     height: auto;
     max-height: 90%;
 }
@@ -341,6 +370,11 @@ StepScreen Label {
 
 #modal_btns Button {
     margin: 0 1;
+}
+
+#new_file_type_box Button:focus {
+    text-style: none;
+    tint: transparent;
 }
 
 /* ── Button variants (themed) ───────────────────────────── */

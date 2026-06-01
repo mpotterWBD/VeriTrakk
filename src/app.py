@@ -16,14 +16,14 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button, ContentSwitcher, DirectoryTree, Footer, Header,
-    Input, Label, Log, Markdown, Static, Tree,
+    Input, Label, Log, Markdown, Static, Switch, Tree,
 )
 
 from .storage import (
     DATA_DIR, LOGS_DIR, Process, Step,
     load_process, save_process,
     load_session, save_session,
-    sanitize_filename,
+    sanitize_filename_for,
     generate_log_text, publish_process,
 )
 
@@ -58,19 +58,19 @@ WELCOME_MD = """\
 
 | Key | Action |
 |-----|--------|
-| Arrow Up / Down | Navigate steps |
-| Arrow Right | Mark step **complete** |
-| Arrow Left | Un-mark a step |
-| N | Add / edit a **note** on the selected step |
+| Arrow Up / Down | Navigate tasks |
+| Arrow Right | Mark task **complete** |
+| Arrow Left | Un-mark a task |
+| N | Add / edit a **note** on the selected task |
 
 ## Process Builder
 
 | Key | Action |
 |-----|--------|
-| A | Add a new top-level step |
-| S | Add a sub-step under current step |
-| E | Edit selected step label / thresholds |
-| D | Delete selected step |
+| A | Add a new top-level task |
+| S | Add a sub task under current task |
+| E | Edit selected task label / thresholds |
+| D | Delete selected task |
 | Ctrl+S | Save process |
 
 ---
@@ -108,6 +108,14 @@ def _step_label(
             t = Text(f"\u2713  {step.label}", style=_GREEN)
             if ts:
                 t.append(ts, style=f"dim {_GREEN}")
+            if step.duration_minutes > 0:
+                h = step.duration_minutes // 60
+                m = step.duration_minutes % 60
+                t.append(f"   {h:02d}:{m:02d}", style=f"dim {_TEAL}")
+    elif step.started:
+        t = Text(f"\u25d4  {step.label}", style="bold dodgerblue")
+        if sub_done is not None and sub_total:
+            t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     else:
         t = Text(f"\u25cb  {step.label}")
         if sub_done is not None and sub_total:
@@ -136,22 +144,24 @@ def _builder_label(step: Step) -> Text:
 # ── Specialized DirectoryTree subclasses ──────────────────────────────────────
 
 class ProcessFileTree(DirectoryTree):
-    """Shows directories and .prcss files only."""
+    """Shows directories and active process/work quest files."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [
             p for p in paths
-            if p.is_dir() or (p.suffix == ".prcss" and "#COMPLETE" not in p.name)
+            if p.is_dir() or (
+                p.suffix in (".prcss", ".wrkqst") and "#COMPLETE" not in p.name
+            )
         ]
 
 
 class LogFileTree(DirectoryTree):
-    """Shows directories, .prcsslog files, and #COMPLETE.prcss files."""
+    """Shows directories, log files, and #COMPLETE source files."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [
             p for p in paths
             if p.is_dir()
-            or p.suffix == ".prcsslog"
-            or (p.suffix == ".prcss" and "#COMPLETE" in p.name)
+            or p.suffix in (".prcsslog", ".wrkqstlog")
+            or (p.suffix in (".prcss", ".wrkqst") and "#COMPLETE" in p.name)
         ]
 
 
@@ -239,10 +249,10 @@ class ThresholdScreen(ModalScreen):
 
 
 class StepScreen(ModalScreen):
-    """Add or edit a step: label, optional note, optional thresholds."""
+    """Add or edit a task: label, optional note, optional thresholds."""
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, existing: Step | None = None, title: str = "Add Step") -> None:
+    def __init__(self, existing: Step | None = None, title: str = "Add Task") -> None:
         super().__init__()
         self._ex    = existing
         self._title = title
@@ -254,7 +264,7 @@ class StepScreen(ModalScreen):
             yield Label("Label")
             yield Input(
                 value=ex.label if ex else "",
-                placeholder="Step name...", id="step_label",
+                placeholder="Task name...", id="step_label",
             )
             yield Label("Note  (optional)")
             yield Input(
@@ -326,11 +336,18 @@ class FilePickerScreen(ModalScreen):
     """Popup file/directory picker – replaces left-sidebar trees."""
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
 
-    def __init__(self, mode: str, start: Path | None = None, filename: str = "") -> None:
+    def __init__(
+        self,
+        mode: str,
+        start: Path | None = None,
+        filename: str = "",
+        save_ext: str = ".prcss",
+    ) -> None:
         super().__init__()
         self._mode     = mode          # "open" | "save" | "logs"
         self._start    = start or Path.home()
         self._filename = filename
+        self._save_ext = save_ext
         self._cur_dir: Path = self._start
 
     def compose(self) -> ComposeResult:
@@ -347,7 +364,7 @@ class FilePickerScreen(ModalScreen):
             elif self._mode == "save":
                 yield DirOnlyTree(self._start, id="fp_tree")
                 yield Label("Filename")
-                yield Input(value=self._filename, placeholder="process.prcss", id="fp_name")
+                yield Input(value=self._filename, placeholder=f"process{self._save_ext}", id="fp_name")
             elif self._mode == "logs":
                 yield LogFileTree(self._start, id="fp_tree")
             with Horizontal(id="fp_btns"):
@@ -384,9 +401,38 @@ class FilePickerScreen(ModalScreen):
         name = self.query_one("#fp_name", Input).value.strip()
         if not name:
             return
-        if not name.endswith(".prcss"):
-            name += ".prcss"
+        if not name.endswith(self._save_ext):
+            name += self._save_ext
         self.dismiss(self._cur_dir / name)
+
+
+class NewFileTypeScreen(ModalScreen):
+    """Choose whether a new file is a process or work quest."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def on_mount(self) -> None:
+        # Avoid auto-focusing the first button to prevent harsh focus tint.
+        self.app.set_focus(None)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="new_file_type_box"):
+            yield Static("New File Type", id="modal_title")
+            yield Static("Choose what you want to create.", id="confirm_msg")
+            with Horizontal(id="modal_btns"):
+                yield Button("Process (.prcss)", variant="primary", id="btn_proc")
+                yield Button("Work Quest (.wrkqst)", variant="success", id="btn_wrkqst")
+                yield Button("Cancel", variant="default", id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_proc":
+            self.dismiss("process")
+        elif event.button.id == "btn_wrkqst":
+            self.dismiss("work_quest")
+        else:
+            self.dismiss(None)
 
 
 # ── Main Application ──────────────────────────────────────────────────────────
@@ -399,13 +445,13 @@ class VeriTrakkApp(App):
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
-        # Run-mode step actions
+        # Run-mode task actions
         Binding("right", "complete_step",   "Complete",  show=False, priority=True),
         Binding("left",  "uncomplete_step", "Un-do",     show=False, priority=True),
         Binding("n",     "note_step",       "Note",      show=True),
         # Build-mode actions
-        Binding("a",      "add_step",     "Add Step", show=False),
-        Binding("s",      "add_sub_step", "Add Sub",  show=False),
+        Binding("a",      "add_step",     "Add Task", show=False),
+        Binding("s",      "add_sub_step", "Add Sub Task",  show=False),
         Binding("e",      "edit_step",    "Edit",     show=False),
         Binding("d",      "delete_step",  "Delete",   show=False),
         Binding("ctrl+s", "save_build",   "Save",     show=False),
@@ -421,6 +467,7 @@ class VeriTrakkApp(App):
     _build_proc:        Process | None = None
     _build_dir:         Path    | None = None
     _build_path:        Path    | None = None  # set when editing an existing file
+    _build_kind:        str           = "process"
     _pending_thresh_idx: int           = -1
 
     # ── Layout ────────────────────────────────────────────────────────────────
@@ -433,6 +480,9 @@ class VeriTrakkApp(App):
             yield Button("Resume", id="btn_resume", classes="toolbar_btn")
             yield Button("Build",  id="btn_build",  classes="toolbar_btn")
             yield Button("Logs",   id="btn_logs",   classes="toolbar_btn")
+            yield Static("", id="quest_time")
+            yield Static("", id="quest_clock_lbl")
+            yield Switch(value=False, id="quest_clock_switch")
             yield Static("", id="status_bar")
 
         with Horizontal(id="main"):
@@ -470,8 +520,8 @@ class VeriTrakkApp(App):
                 with Vertical(id="view_build"):
                     with Horizontal(id="build_toolbar"):
                         yield Input(placeholder="Process name...", id="build_name_inp")
-                        yield Button("+ Step",  id="btn_add_step",  variant="success", classes="build_btn")
-                        yield Button("+ Sub",   id="btn_add_sub",   variant="success", classes="build_btn")
+                        yield Button("+ Task",  id="btn_add_step",  variant="success", classes="build_btn")
+                        yield Button("+ Sub Task",   id="btn_add_sub",   variant="success", classes="build_btn")
                         yield Button("Edit",    id="btn_edit_step", variant="default", classes="build_btn")
                         yield Button("Delete",  id="btn_del_step",  variant="error",   classes="build_btn")
                         yield Button("Save",    id="btn_save_proc", variant="primary", classes="build_btn")
@@ -491,6 +541,7 @@ class VeriTrakkApp(App):
         build_tree = self.query_one("#builder_tree", Tree)
         build_tree.auto_expand = False
         build_tree.root.expand()
+        self.set_interval(30, self._tick_clock)
         self._show_home()
 
     # ── Mode management ───────────────────────────────────────────────────────
@@ -515,6 +566,7 @@ class VeriTrakkApp(App):
         self._set_mode("home")
         self._switch("side_home", "view_home")
         self.query_one("#status_bar", Static).update("")
+        self._refresh_quest_clock_widgets()
 
     def _open_picker(self) -> None:
         start = self._build_dir or Path.home()
@@ -532,14 +584,14 @@ class VeriTrakkApp(App):
     def _on_logs_selected(self, path: Path | None) -> None:
         if path is None:
             return
-        if path.suffix == ".prcsslog":
+        if path.suffix in (".prcsslog", ".wrkqstlog"):
             self._set_mode("logs")
             self._view_log(path)
-        elif path.suffix == ".prcss" and "#COMPLETE" in path.name:
+        elif path.suffix in (".prcss", ".wrkqst") and "#COMPLETE" in path.name:
             self.push_screen(
                 ConfirmScreen(
                     f"Publish and dissolve:\n{path.name}\n\n"
-                    "This will write a .prcsslog and delete the source file."
+                    "This will write a log file and delete the source file."
                 ),
                 callback=lambda confirmed: self._do_dissolve(path) if confirmed else None,
             )
@@ -549,6 +601,7 @@ class VeriTrakkApp(App):
         self._switch("side_run", "view_run")
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
+        self._refresh_quest_clock_widgets()
         self._refresh_status()
         self.query_one("#process_tree", Tree).focus()
 
@@ -561,14 +614,16 @@ class VeriTrakkApp(App):
                 return
             self._build_path = existing_path
             self._build_dir  = existing_path.parent
+            self._build_kind = self._build_proc.kind
         else:
             self._build_path = None
-            self._build_proc = Process(name="New Process")
+            self._build_proc = Process(name="New Process", kind=self._build_kind)
 
         self.query_one("#build_name_inp", Input).value = self._build_proc.name
         self._rebuild_builder_tree()
         self._update_build_file_label()
         self._switch("side_build", "view_build")
+        self._refresh_quest_clock_widgets()
         self._refresh_status()
         self.query_one("#build_name_inp", Input).focus()
 
@@ -602,8 +657,14 @@ class VeriTrakkApp(App):
 
     # ── New / Open / Resume / Build flows ─────────────────────────────────────
     def _start_new_process(self) -> None:
+        self.push_screen(NewFileTypeScreen(), callback=self._on_new_file_type)
+
+    def _on_new_file_type(self, kind: str | None) -> None:
+        if kind is None:
+            return
+        self._build_kind = kind
         self._build_path = None
-        self._build_proc = Process(name="New Process")
+        self._build_proc = Process(name="New Process", kind=kind)
         self._show_build()
 
     def _pick_build_target(self) -> None:
@@ -627,11 +688,77 @@ class VeriTrakkApp(App):
             proc = load_process(file_path)
         except OSError as exc:
             return
+        if not proc.kind:
+            proc.kind = "work_quest" if file_path.suffix == ".wrkqst" else "process"
         self._process   = proc
         self._proc_path = file_path
         self._build_dir = file_path.parent
         save_session(file_path.parent, file_path.name)
         self._show_run()
+
+    def _is_work_quest_active(self) -> bool:
+        return (
+            self._mode == "run"
+            and self._process is not None
+            and self._process.kind == "work_quest"
+        )
+
+    def _tick_clock(self) -> None:
+        if self._is_work_quest_active():
+            self._refresh_quest_clock_widgets()
+
+    def _format_minutes(self, minutes: int) -> str:
+        h = minutes // 60
+        m = minutes % 60
+        return f"{h:02d}:{m:02d}"
+
+    def _refresh_quest_clock_widgets(self) -> None:
+        t = self.query_one("#quest_time", Static)
+        lbl = self.query_one("#quest_clock_lbl", Static)
+        sw = self.query_one("#quest_clock_switch", Switch)
+
+        if self._is_work_quest_active():
+            minutes = self._process.total_clock_minutes()
+            t.update(f"Quest Time {self._format_minutes(minutes)}")
+            lbl.update("Clock")
+            sw.display = True
+            t.display = True
+            lbl.display = True
+            sw.value = self._process.clocked_in
+            sw.disabled = False
+        else:
+            t.update("")
+            lbl.update("")
+            sw.display = False
+            t.display = False
+            lbl.display = False
+            sw.value = False
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id != "quest_clock_switch":
+            return
+        if not self._is_work_quest_active() or not self._process or not self._proc_path:
+            return
+
+        now = datetime.now().isoformat()
+        changed = False
+        if event.value and not self._process.clocked_in:
+            self._process.clocked_in = True
+            self._process.clock_active_since = now
+            self._process.clock_events.append(f"IN|{now}")
+            changed = True
+        elif not event.value and self._process.clocked_in:
+            self._process.clocked_in = False
+            self._process.clock_active_since = ""
+            self._process.clock_events.append(f"OUT|{now}")
+            changed = True
+
+        if not changed:
+            return
+
+        save_process(self._process, self._proc_path)
+        self._refresh_quest_clock_widgets()
+        self._refresh_status()
 
     # ── Process tree (run mode) ───────────────────────────────────────────────
     def _rebuild_proc_tree(self) -> None:
@@ -696,7 +823,7 @@ class VeriTrakkApp(App):
 
         prog_t = Text()
         prog_t.append(f"{_progress_bar(pct)}\n", style=_GREEN)
-        prog_t.append(f"{proc.done_top}/{proc.total_top} steps  ", style=_KHAKI)
+        prog_t.append(f"{proc.done_top}/{proc.total_top} tasks  ", style=_KHAKI)
         prog_t.append(f"{pct:.0f}%", style=_GOLD)
         self.query_one("#run_progress", Static).update(prog_t)
 
@@ -710,6 +837,11 @@ class VeriTrakkApp(App):
             t.append(f"  {proc.done_top}/{proc.total_top}", style=_KHAKI)
             t.append(f"  {_progress_bar(pct, 12)}", style=_GREEN)
             t.append(f"  {pct:.0f}%", style=_GOLD)
+            if proc.kind == "work_quest":
+                t.append("  Time ", style="dim")
+                t.append(self._format_minutes(proc.total_clock_minutes()), style=_TEAL)
+                t.append("  ", style="dim")
+                t.append("IN" if proc.clocked_in else "OUT", style=_GREEN if proc.clocked_in else _KHAKI)
             bar.update(t)
         elif self._mode == "build" and self._build_proc:
             t = Text("  ")
@@ -728,7 +860,7 @@ class VeriTrakkApp(App):
             return
         step = self._process.steps[node.data]
         t = Text()
-        # Step label
+        # Task label
         t.append(step.label + "\n", style=f"bold {_SALMON}")
         # Status
         if step.completed:
@@ -745,6 +877,13 @@ class VeriTrakkApp(App):
                     except ValueError:
                         pass
                 t.append(f"\u2713 Done{ts}\n", style=_GREEN)
+            if step.duration_minutes > 0:
+                t.append(
+                    f"Duration {self._format_minutes(step.duration_minutes)}\n",
+                    style=_TEAL,
+                )
+        elif step.started:
+            t.append("\u25d4 In Progress\n", style="bold dodgerblue")
         else:
             t.append("\u25cb Pending\n", style="dim")
         # Note
@@ -772,11 +911,28 @@ class VeriTrakkApp(App):
             return
         step_idx = node.data
         step     = self._process.steps[step_idx]
+
+        if self._process.kind == "work_quest" and not self._process.clocked_in:
+            return
+
         if step.completed:
             return
-        # Parent node: require sub-steps to be completed first
-        if node.children:
+
+        # Work quest flow: first right starts, second right completes.
+        if self._process.kind == "work_quest" and not step.started:
+            step.started = True
+            step.started_at = datetime.now().isoformat()
+            save_process(self._process, self._proc_path)
+            self._rebuild_proc_tree()
+            self._refresh_run_sidebar()
+            self._refresh_status()
             return
+
+        # Parent node complete gate: only complete when all sub-steps are done.
+        if node.children:
+            subs = self._process.sub_steps_of(step_idx)
+            if not subs or any(not s.completed for _, s in subs):
+                return
 
         if step.has_threshold():
             self._pending_thresh_idx = step_idx
@@ -814,8 +970,21 @@ class VeriTrakkApp(App):
     def _do_complete(self, step_idx: int, result: str = "") -> None:
         proc = self._process
         step = proc.steps[step_idx]
+        now = datetime.now()
+
+        if proc.kind == "work_quest" and not step.started:
+            step.started = True
+            step.started_at = now.isoformat()
+
+        if proc.kind == "work_quest" and step.started_at:
+            try:
+                started = datetime.fromisoformat(step.started_at)
+                step.duration_minutes = max(0, int((now - started).total_seconds() // 60))
+            except ValueError:
+                step.duration_minutes = 0
+
         step.completed    = True
-        step.completed_at = datetime.now().isoformat()
+        step.completed_at = now.isoformat()
         step.result       = result
 
         # Auto-complete parent if all siblings are done
@@ -826,12 +995,23 @@ class VeriTrakkApp(App):
                 if all(s.completed for _, s in subs):
                     parent = proc.steps[parent_idx]
                     parent.completed    = True
-                    parent.completed_at = datetime.now().isoformat()
+                    parent.completed_at = now.isoformat()
+                    if proc.kind == "work_quest":
+                        if not parent.started and parent.started_at:
+                            parent.started = True
+                        if parent.started_at:
+                            try:
+                                parent_start = datetime.fromisoformat(parent.started_at)
+                                parent.duration_minutes = max(
+                                    0, int((now - parent_start).total_seconds() // 60)
+                                )
+                            except ValueError:
+                                parent.duration_minutes = 0
 
         # Check if the whole process is done
         if proc.is_fully_complete() and not proc.completed:
             proc.completed    = True
-            proc.completed_at = datetime.now().isoformat()
+            proc.completed_at = now.isoformat()
             self._mark_complete_file()
 
         save_process(proc, self._proc_path)
@@ -862,6 +1042,7 @@ class VeriTrakkApp(App):
         step.completed    = False
         step.completed_at = ""
         step.result       = ""
+        step.duration_minutes = 0
 
         # Un-complete parent if it was auto-completed
         if step.level == 2:
@@ -870,6 +1051,7 @@ class VeriTrakkApp(App):
                 parent = proc.steps[parent_idx]
                 parent.completed    = False
                 parent.completed_at = ""
+                parent.duration_minutes = 0
 
         if proc.completed:
             proc.completed    = False
@@ -905,7 +1087,7 @@ class VeriTrakkApp(App):
     def _mark_complete_file(self) -> None:
         if not self._proc_path or "#COMPLETE" in self._proc_path.name:
             return
-        new_name = self._proc_path.stem + "#COMPLETE.prcss"
+        new_name = f"{self._proc_path.stem}#COMPLETE{self._proc_path.suffix}"
         new_path = self._proc_path.parent / new_name
         try:
             self._proc_path.rename(new_path)
@@ -917,7 +1099,7 @@ class VeriTrakkApp(App):
     def _unmark_complete_file(self) -> None:
         if not self._proc_path or "#COMPLETE" not in self._proc_path.name:
             return
-        new_name = self._proc_path.name.replace("#COMPLETE.prcss", ".prcss")
+        new_name = self._proc_path.name.replace("#COMPLETE", "")
         new_path = self._proc_path.parent / new_name
         try:
             self._proc_path.rename(new_path)
@@ -962,7 +1144,7 @@ class VeriTrakkApp(App):
         if self._mode != "build":
             return
         self.push_screen(
-            StepScreen(title="Add Top-Level Step"),
+            StepScreen(title="Add Top-Level Task"),
             callback=self._on_add_step,
         )
 
@@ -990,7 +1172,7 @@ class VeriTrakkApp(App):
         if self._mode != "build":
             return
         self.push_screen(
-            StepScreen(title="Add Sub-Step"),
+            StepScreen(title="Add Sub Task"),
             callback=self._on_add_sub,
         )
 
@@ -1025,7 +1207,7 @@ class VeriTrakkApp(App):
             return
         step = self._build_proc.steps[cur_idx]
         self.push_screen(
-            StepScreen(existing=step, title="Edit Step"),
+            StepScreen(existing=step, title="Edit Task"),
             callback=lambda d: self._on_edit_step(cur_idx, d),
         )
 
@@ -1069,9 +1251,10 @@ class VeriTrakkApp(App):
         else:
             # New process — ask where to save
             start = self._build_dir or Path.home()
-            suggested = sanitize_filename(self._build_proc.name)
+            suggested = sanitize_filename_for(self._build_proc.name, self._build_proc.kind)
+            ext = ".wrkqst" if self._build_proc.kind == "work_quest" else ".prcss"
             self.push_screen(
-                FilePickerScreen("save", start=start, filename=suggested),
+                FilePickerScreen("save", start=start, filename=suggested, save_ext=ext),
                 callback=self._on_save_dialog,
             )
 

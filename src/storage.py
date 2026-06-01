@@ -25,8 +25,11 @@ SESSION_FILE = DATA_DIR / "session.json"
 class Step:
     label: str
     level: int                # 1 = top-level step, 2 = sub-step
+    started: bool = False
+    started_at: str = ""      # ISO-8601 string
     completed: bool = False
     completed_at: str = ""    # ISO-8601 string
+    duration_minutes: int = 0
     note: str = ""
     threshold_upper: str = ""
     threshold_lower: str = ""
@@ -39,7 +42,11 @@ class Step:
 @dataclass
 class Process:
     name: str
+    kind: str = "process"      # "process" | "work_quest"
     steps: list[Step] = field(default_factory=list)
+    clocked_in: bool = False
+    clock_active_since: str = ""
+    clock_events: list[str] = field(default_factory=list)
     completed: bool = False
     completed_at: str = ""
 
@@ -80,11 +87,43 @@ class Process:
                 return i
         return None
 
+    def total_clock_minutes(self) -> int:
+        """Total clocked minutes from IN/OUT events + active clock-in window."""
+        total = 0
+        active_in: datetime | None = None
+
+        for event in self.clock_events:
+            if "|" not in event:
+                continue
+            kind, ts = event.split("|", 1)
+            try:
+                dt = datetime.fromisoformat(ts)
+            except ValueError:
+                continue
+            if kind == "IN":
+                active_in = dt
+            elif kind == "OUT" and active_in is not None:
+                delta = dt - active_in
+                total += max(0, int(delta.total_seconds() // 60))
+                active_in = None
+
+        if self.clocked_in and self.clock_active_since:
+            try:
+                active = datetime.fromisoformat(self.clock_active_since)
+                delta = datetime.now() - active
+                total += max(0, int(delta.total_seconds() // 60))
+            except ValueError:
+                pass
+
+        return total
+
 
 # ── CSV I/O ───────────────────────────────────────────────────────────────────
 
 _FIELDS = [
+    "kind", "clocked_in", "clock_active_since", "clock_events",
     "level", "label", "completed", "completed_at",
+    "started", "started_at", "duration_minutes",
     "note", "threshold_upper", "threshold_lower", "result",
 ]
 
@@ -95,14 +134,26 @@ def save_process(proc: Process, file_path: Path) -> None:
         w = csv.DictWriter(f, fieldnames=_FIELDS)
         w.writeheader()
         w.writerow({
+            "kind": proc.kind,
+            "clocked_in": proc.clocked_in,
+            "clock_active_since": proc.clock_active_since,
+            "clock_events": json.dumps(proc.clock_events),
             "level": 0, "label": proc.name,
             "completed": proc.completed, "completed_at": proc.completed_at,
+            "started": "", "started_at": "", "duration_minutes": "",
             "note": "", "threshold_upper": "", "threshold_lower": "", "result": "",
         })
         for s in proc.steps:
             w.writerow({
+                "kind": "",
+                "clocked_in": "",
+                "clock_active_since": "",
+                "clock_events": "",
                 "level": s.level, "label": s.label,
                 "completed": s.completed, "completed_at": s.completed_at,
+                "started": s.started,
+                "started_at": s.started_at,
+                "duration_minutes": s.duration_minutes,
                 "note": s.note,
                 "threshold_upper": s.threshold_upper,
                 "threshold_lower": s.threshold_lower,
@@ -124,17 +175,38 @@ def _load_csv(file_path: Path) -> Process:
     if not rows or "level" not in rows[0]:
         raise ValueError("Not a CSV process file")
     root = rows[0]
+    kind = root.get("kind", "").strip()
+    if not kind:
+        kind = "work_quest" if file_path.suffix == ".wrkqst" else "process"
+    events_raw = root.get("clock_events", "")
+    try:
+        clock_events = json.loads(events_raw) if events_raw else []
+    except Exception:
+        clock_events = []
+
     proc = Process(
         name=root["label"],
+        kind=kind,
+        clocked_in=root.get("clocked_in", "false").lower() == "true",
+        clock_active_since=root.get("clock_active_since", ""),
+        clock_events=clock_events if isinstance(clock_events, list) else [],
         completed=root.get("completed", "false").lower() == "true",
         completed_at=root.get("completed_at", ""),
     )
     for row in rows[1:]:
+        dur_raw = row.get("duration_minutes", "0").strip()
+        try:
+            duration_minutes = int(dur_raw or "0")
+        except ValueError:
+            duration_minutes = 0
         proc.steps.append(Step(
             label=row["label"],
             level=int(row.get("level", 1)),
+            started=row.get("started", "false").lower() == "true",
+            started_at=row.get("started_at", ""),
             completed=row.get("completed", "false").lower() == "true",
             completed_at=row.get("completed_at", ""),
+            duration_minutes=duration_minutes,
             note=row.get("note", ""),
             threshold_upper=row.get("threshold_upper", ""),
             threshold_lower=row.get("threshold_lower", ""),
@@ -180,6 +252,7 @@ def _load_legacy(file_path: Path) -> Process:
     root_raw = lines[0].strip()
     proc = Process(
         name=_strip(root_raw),
+        kind="work_quest" if file_path.suffix == ".wrkqst" else "process",
         completed="[S]|" in root_raw,
         completed_at=_ts(root_raw),
     )
@@ -192,8 +265,11 @@ def _load_legacy(file_path: Path) -> Process:
         proc.steps.append(Step(
             label=_strip(raw),
             level=2 if "[>]|" in raw else 1,
+            started=False,
+            started_at="",
             completed="[S]|" in raw,
             completed_at=_ts(raw),
+            duration_minutes=0,
             note=_note(raw),
             threshold_upper=ut,
             threshold_lower=lt,
@@ -227,16 +303,28 @@ def sanitize_filename(name: str) -> str:
     return (safe or "new_process") + ".prcss"
 
 
+def sanitize_filename_for(name: str, kind: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*]+', "_", name).strip()
+    ext = ".wrkqst" if kind == "work_quest" else ".prcss"
+    return (safe or "new_process") + ext
+
+
 # ── Log generation / publishing ───────────────────────────────────────────────
 
 def generate_log_text(proc: Process) -> str:
     W = 64
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    is_wq = proc.kind == "work_quest"
+
+    def _hours_text(minutes: int) -> str:
+        return f"{minutes / 60:.2f} h"
+
+    title = "  VERITRAKK  -  WORK QUEST LOG" if is_wq else "  VERITRAKK  -  PROCESS LOG"
     lines: list[str] = [
         "=" * W,
-        "  VERITRAKK  -  PROCESS LOG",
+        title,
         "=" * W,
-        f"  Process  : {proc.name}",
+        f"  {'WorkQuest' if is_wq else 'Process'}  : {proc.name}",
         f"  Published: {now}",
     ]
     if proc.completed_at:
@@ -271,6 +359,11 @@ def generate_log_text(proc: Process) -> str:
 
         lines.append(f"  *  {step.label}")
         lines.append(f"     Status : {status}{ts_str}")
+        if is_wq:
+            lines.append(
+                f"     Hours  : {_hours_text(step.duration_minutes)}"
+                f"  ({step.duration_minutes} min)"
+            )
         if step.note:
             lines.append(f"     Note   : {step.note}")
         if step.threshold_upper or step.threshold_lower:
@@ -297,7 +390,13 @@ def generate_log_text(proc: Process) -> str:
                     sub_ts = f"  {dt.strftime('%H:%M:%S')}"
                 except ValueError:
                     sub_ts = f"  {sub.completed_at}"
-            lines.append(f"        {sym}  {sub.label}{sub_ts}")
+            sub_line = f"        {sym}  {sub.label}{sub_ts}"
+            if is_wq:
+                sub_line += (
+                    f"  |  Hours {_hours_text(sub.duration_minutes)}"
+                    f" ({sub.duration_minutes} min)"
+                )
+            lines.append(sub_line)
             if sub.note:
                 lines.append(f"               NOTE: {sub.note}")
             j += 1
@@ -307,17 +406,22 @@ def generate_log_text(proc: Process) -> str:
 
     lines += [
         "-" * W,
-        f"  {proc.done_top} / {proc.total_top} top-level steps completed",
-        "=" * W,
+        f"  {proc.done_top} / {proc.total_top} top-level tasks completed",
     ]
+    if is_wq:
+        total_minutes = proc.total_clock_minutes()
+        lines.append(
+            f"  Total clocked hours: {_hours_text(total_minutes)} ({total_minutes} min)"
+        )
+    lines.append("=" * W)
     return "\n".join(lines)
 
 
 def publish_process(proc: Process, src_path: Path) -> Path:
-    """Write .prcsslog, copy to data/logs/, delete source. Returns the log path."""
+    """Write a log file, copy to data/logs/, delete source. Returns the log path."""
     log_text = generate_log_text(proc)
     stem     = src_path.stem.replace("#COMPLETE", "").strip()
-    log_name = stem + ".prcsslog"
+    log_name = stem + (".wrkqstlog" if src_path.suffix == ".wrkqst" else ".prcsslog")
     log_path = src_path.parent / log_name
 
     log_path.write_text(log_text, encoding="utf-8")
