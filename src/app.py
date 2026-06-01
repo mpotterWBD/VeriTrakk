@@ -700,7 +700,7 @@ class VeriTrakkApp(App):
         self._refresh_quest_clock_widgets()
 
     def _open_picker(self) -> None:
-        start = self._build_dir or Path.home()
+        start = Path.home()
         self.push_screen(
             FilePickerScreen("open", start=start),
             callback=lambda path: self._load_process(path) if path else None,
@@ -845,6 +845,48 @@ class VeriTrakkApp(App):
         m = max(0, minutes % 60)
         # Keep Digits fixed-width for readability.
         return f"{str(h).zfill(2)}:{str(m).zfill(2)}"
+
+    def _work_quest_minutes_between(self, proc: Process, started_at: str, ended_at: datetime) -> int:
+        """Minutes between start/end that overlap work-quest clocked-in windows."""
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+        except ValueError:
+            return 0
+
+        if ended_at <= start_dt:
+            return 0
+
+        total_seconds = 0
+        active_in: datetime | None = None
+        intervals: list[tuple[datetime, datetime]] = []
+
+        for event in proc.clock_events:
+            if "|" not in event:
+                continue
+            kind, ts = event.split("|", 1)
+            try:
+                dt = datetime.fromisoformat(ts)
+            except ValueError:
+                continue
+
+            if kind == "IN":
+                active_in = dt
+            elif kind == "OUT" and active_in is not None:
+                intervals.append((active_in, dt))
+                active_in = None
+
+        if active_in is not None:
+            intervals.append((active_in, ended_at))
+
+        for in_dt, out_dt in intervals:
+            if out_dt <= in_dt:
+                continue
+            overlap_start = max(start_dt, in_dt)
+            overlap_end = min(ended_at, out_dt)
+            if overlap_end > overlap_start:
+                total_seconds += int((overlap_end - overlap_start).total_seconds())
+
+        return max(0, total_seconds // 60)
 
     def _refresh_quest_clock_widgets(self) -> None:
         strip = self.query_one("#run_clock_strip", Horizontal)
@@ -1157,11 +1199,11 @@ class VeriTrakkApp(App):
             step.started_at = now.isoformat()
 
         if proc.kind == "work_quest" and step.started_at:
-            try:
-                started = datetime.fromisoformat(step.started_at)
-                step.duration_minutes = max(0, int((now - started).total_seconds() // 60))
-            except ValueError:
-                step.duration_minutes = 0
+            step.duration_minutes = self._work_quest_minutes_between(
+                proc,
+                step.started_at,
+                now,
+            )
 
         step.completed    = True
         step.completed_at = now.isoformat()
@@ -1180,13 +1222,11 @@ class VeriTrakkApp(App):
                         if not parent.started and parent.started_at:
                             parent.started = True
                         if parent.started_at:
-                            try:
-                                parent_start = datetime.fromisoformat(parent.started_at)
-                                parent.duration_minutes = max(
-                                    0, int((now - parent_start).total_seconds() // 60)
-                                )
-                            except ValueError:
-                                parent.duration_minutes = 0
+                            parent.duration_minutes = self._work_quest_minutes_between(
+                                proc,
+                                parent.started_at,
+                                now,
+                            )
 
         # Check if the whole process is done
         if proc.is_fully_complete() and not proc.completed:
