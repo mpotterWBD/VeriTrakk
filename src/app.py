@@ -725,9 +725,19 @@ class VeriTrakkApp(App):
         digit = self.query_one("#quest_digit", Digits)
         switch = self.query_one("#quest_clock_switch", Switch)
         state = self.query_one("#quest_clock_state", Static)
+        toolbar = self.query_one("#toolbar", Horizontal)
+        sidebar = self.query_one("#sidebar", ContentSwitcher)
+        step_info = self.query_one("#run_step_info", Static)
+
+        themed = [strip, toolbar, sidebar, step_info]
+        for widget in themed:
+            widget.remove_class("clocked_in")
+            widget.remove_class("clocked_out")
 
         if not self._is_work_quest_active():
             strip.display = False
+            for widget in themed:
+                widget.add_class("clocked_out")
             return
 
         strip.display = True
@@ -739,12 +749,16 @@ class VeriTrakkApp(App):
         self._syncing_clock_switch = False
 
         if self._process.clocked_in:
+            for widget in themed:
+                widget.add_class("clocked_in")
             switch.remove_class("clocked_out")
             switch.add_class("clocked_in")
             state.remove_class("clocked_out")
             state.add_class("clocked_in")
             state.update("CLOCKED IN")
         else:
+            for widget in themed:
+                widget.add_class("clocked_out")
             switch.remove_class("clocked_in")
             switch.add_class("clocked_out")
             state.remove_class("clocked_in")
