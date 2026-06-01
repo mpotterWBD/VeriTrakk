@@ -16,7 +16,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button, ContentSwitcher, DirectoryTree, Footer, Header,
-    Input, Label, Log, Markdown, Static, Switch, Tree,
+    Digits, Input, Label, Log, Markdown, Static, Switch, Tree,
 )
 
 from .storage import (
@@ -33,6 +33,7 @@ _GREEN   = "#8fbc8f"  # darkseagreen
 _GOLD    = "#daa520"  # goldenrod
 _KHAKI   = "#bdb76b"  # darkkhaki
 _TEAL    = "#5f9ea0"  # cadetblue
+_BLUE    = "#1e90ff"  # dodgerblue
 
 
 # ── Welcome content ───────────────────────────────────────────────────────────
@@ -113,7 +114,7 @@ def _step_label(
                 m = step.duration_minutes % 60
                 t.append(f"   {h:02d}:{m:02d}", style=f"dim {_TEAL}")
     elif step.started:
-        t = Text(f"\u25d4  {step.label}", style="bold dodgerblue")
+        t = Text(f"\u25d4  {step.label}", style=f"bold {_BLUE}")
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     else:
@@ -449,6 +450,7 @@ class VeriTrakkApp(App):
         Binding("right", "complete_step",   "Complete",  show=False, priority=True),
         Binding("left",  "uncomplete_step", "Un-do",     show=False, priority=True),
         Binding("n",     "note_step",       "Note",      show=True),
+        Binding("c",     "toggle_clock",    "Clock In/Out", show=True),
         # Build-mode actions
         Binding("a",      "add_step",     "Add Task", show=False),
         Binding("s",      "add_sub_step", "Add Sub Task",  show=False),
@@ -469,6 +471,7 @@ class VeriTrakkApp(App):
     _build_path:        Path    | None = None  # set when editing an existing file
     _build_kind:        str           = "process"
     _pending_thresh_idx: int           = -1
+    _syncing_clock_switch: bool        = False
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
@@ -480,9 +483,6 @@ class VeriTrakkApp(App):
             yield Button("Resume", id="btn_resume", classes="toolbar_btn")
             yield Button("Build",  id="btn_build",  classes="toolbar_btn")
             yield Button("Logs",   id="btn_logs",   classes="toolbar_btn")
-            yield Static("", id="quest_time")
-            yield Static("", id="quest_clock_lbl")
-            yield Switch(value=False, id="quest_clock_switch")
             yield Static("", id="status_bar")
 
         with Horizontal(id="main"):
@@ -514,6 +514,11 @@ class VeriTrakkApp(App):
 
                 # run: process tree
                 with Vertical(id="view_run"):
+                    with Horizontal(id="run_clock_strip"):
+                        yield Digits("00:00", id="quest_digit")
+                        with Horizontal(id="run_clock_toggle_row"):
+                            yield Switch(value=False, id="quest_clock_switch")
+                            yield Static("CLOCKED OUT", id="quest_clock_state")
                     yield Tree("", id="process_tree")
 
                 # build: toolbar + builder tree
@@ -710,57 +715,72 @@ class VeriTrakkApp(App):
             self._refresh_quest_clock_widgets()
 
     def _format_minutes(self, minutes: int) -> str:
-        h = minutes // 60
-        m = minutes % 60
-        return f"{h:02d}:{m:02d}"
+        h = max(0, minutes // 60)
+        m = max(0, minutes % 60)
+        # Keep Digits fixed-width for readability.
+        return f"{str(h).zfill(2)}:{str(m).zfill(2)}"
 
     def _refresh_quest_clock_widgets(self) -> None:
-        t = self.query_one("#quest_time", Static)
-        lbl = self.query_one("#quest_clock_lbl", Static)
-        sw = self.query_one("#quest_clock_switch", Switch)
+        strip = self.query_one("#run_clock_strip", Horizontal)
+        digit = self.query_one("#quest_digit", Digits)
+        switch = self.query_one("#quest_clock_switch", Switch)
+        state = self.query_one("#quest_clock_state", Static)
 
-        if self._is_work_quest_active():
-            minutes = self._process.total_clock_minutes()
-            t.update(f"Quest Time {self._format_minutes(minutes)}")
-            lbl.update("Clock")
-            sw.display = True
-            t.display = True
-            lbl.display = True
-            sw.value = self._process.clocked_in
-            sw.disabled = False
-        else:
-            t.update("")
-            lbl.update("")
-            sw.display = False
-            t.display = False
-            lbl.display = False
-            sw.value = False
-
-    def on_switch_changed(self, event: Switch.Changed) -> None:
-        if event.switch.id != "quest_clock_switch":
+        if not self._is_work_quest_active():
+            strip.display = False
             return
+
+        strip.display = True
+        digit.update(self._format_minutes(self._process.total_clock_minutes()))
+
+        self._syncing_clock_switch = True
+        switch.value = self._process.clocked_in
+        switch.disabled = False
+        self._syncing_clock_switch = False
+
+        if self._process.clocked_in:
+            switch.remove_class("clocked_out")
+            switch.add_class("clocked_in")
+            state.remove_class("clocked_out")
+            state.add_class("clocked_in")
+            state.update("CLOCKED IN")
+        else:
+            switch.remove_class("clocked_in")
+            switch.add_class("clocked_out")
+            state.remove_class("clocked_in")
+            state.add_class("clocked_out")
+            state.update("CLOCKED OUT")
+
+    def _toggle_work_quest_clock(self, clock_in: bool) -> None:
         if not self._is_work_quest_active() or not self._process or not self._proc_path:
             return
 
+        if clock_in == self._process.clocked_in:
+            return
+
         now = datetime.now().isoformat()
-        changed = False
-        if event.value and not self._process.clocked_in:
+        if clock_in:
             self._process.clocked_in = True
             self._process.clock_active_since = now
             self._process.clock_events.append(f"IN|{now}")
-            changed = True
-        elif not event.value and self._process.clocked_in:
+        else:
             self._process.clocked_in = False
             self._process.clock_active_since = ""
             self._process.clock_events.append(f"OUT|{now}")
-            changed = True
-
-        if not changed:
-            return
 
         save_process(self._process, self._proc_path)
         self._refresh_quest_clock_widgets()
         self._refresh_status()
+
+    def action_toggle_clock(self) -> None:
+        if not self._is_work_quest_active() or not self._process:
+            return
+        self._toggle_work_quest_clock(not self._process.clocked_in)
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id != "quest_clock_switch" or self._syncing_clock_switch:
+            return
+        self._toggle_work_quest_clock(event.value)
 
     # ── Process tree (run mode) ───────────────────────────────────────────────
     def _rebuild_proc_tree(self) -> None:
@@ -885,7 +905,7 @@ class VeriTrakkApp(App):
                     style=_TEAL,
                 )
         elif step.started:
-            t.append("\u25d4 In Progress\n", style="bold dodgerblue")
+            t.append("\u25d4 In Progress\n", style=f"bold {_BLUE}")
         else:
             t.append("\u25cb Pending\n", style="dim")
         # Note
@@ -1031,16 +1051,20 @@ class VeriTrakkApp(App):
         step_idx = node.data
         proc     = self._process
         step     = proc.steps[step_idx]
-        if not step.completed:
+        can_revert_started = proc.kind == "work_quest" and step.started and not step.completed
+        if not step.completed and not can_revert_started:
             return
 
-        # Block uncomplete on a parent step if all its sub-steps are still done.
+        # Block uncomplete on a completed parent when all its sub-tasks are still done.
         # The user must undo a child first.
-        if step.level == 1:
+        if step.level == 1 and step.completed:
             subs = proc.sub_steps_of(step_idx)
             if subs and all(s.completed for _, s in subs):
                 return
 
+        # Revert to "not even started".
+        step.started      = False
+        step.started_at   = ""
         step.completed    = False
         step.completed_at = ""
         step.result       = ""
@@ -1051,6 +1075,8 @@ class VeriTrakkApp(App):
             parent_idx = proc.parent_of(step_idx)
             if parent_idx is not None:
                 parent = proc.steps[parent_idx]
+                parent.started      = False
+                parent.started_at   = ""
                 parent.completed    = False
                 parent.completed_at = ""
                 parent.duration_minutes = 0
@@ -1328,6 +1354,8 @@ class VeriTrakkApp(App):
     # ── Binding guards ────────────────────────────────────────────────────────
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action in ("complete_step", "uncomplete_step", "note_step"):
+            return self._mode == "run"
+        if action == "toggle_clock":
             return self._mode == "run"
         if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
             return self._mode == "build" and not isinstance(self.focused, Input)

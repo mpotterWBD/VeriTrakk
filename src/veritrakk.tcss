@@ -58,28 +58,9 @@ Footer {
 
 #status_bar {
     width: 1fr;
-    margin-left: 2;
+    margin-left: 1;
     color: darkkhaki;
     content-align: right middle;
-}
-
-#quest_time {
-    margin-left: 2;
-    color: cadetblue;
-    text-style: bold;
-    display: none;
-}
-
-#quest_clock_lbl {
-    margin-left: 1;
-    color: darkkhaki;
-    display: none;
-}
-
-#quest_clock_switch {
-    margin-left: 1;
-    width: auto;
-    display: none;
 }
 
 /* ── Main split ─────────────────────────────────────────── */
@@ -200,6 +181,63 @@ MarkdownFence {
 #view_run {
     height: 1fr;
     padding: 0;
+}
+
+#run_clock_strip {
+    height: 6;
+    padding: 0 1;
+    border-bottom: solid #1f332a;
+    align: left middle;
+}
+
+#quest_digit {
+    width: 22;
+    min-width: 22;
+    color: #7fd4d8;
+}
+
+#run_clock_toggle_row {
+    height: 3;
+    align: left middle;
+    width: 22;
+    min-width: 22;
+    margin-left: 2;
+}
+
+#quest_clock_switch {
+    margin-left: 0;
+    min-width: 9;
+    width: 9;
+    background: transparent;
+    color: #b8b8b8;
+    border: round #5f5f5f;
+}
+
+#quest_clock_switch.clocked_in {
+    background: transparent;
+    color: #d6ffd6;
+    border: round #3f7a53;
+}
+
+#quest_clock_switch.clocked_out {
+    background: transparent;
+    color: #b8b8b8;
+    border: round #5f5f5f;
+}
+
+#quest_clock_state {
+    margin-left: 1;
+    width: 12;
+    text-style: bold;
+    color: #8e8e8e;
+}
+
+#quest_clock_state.clocked_in {
+    color: #8fbc8f;
+}
+
+#quest_clock_state.clocked_out {
+    color: #9a9a9a;
 }
 
 #process_tree {
