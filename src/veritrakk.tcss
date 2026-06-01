@@ -376,7 +376,7 @@ NewFileTypeScreen {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 60;
+    width: 78;
     height: auto;
     max-height: 90%;
 }
@@ -423,6 +423,20 @@ StepScreen Label {
     padding-top: 1;
 }
 
+#note_existing {
+    background: #111;
+    color: darkkhaki;
+    border: round #2f2f2f;
+    padding: 0 1;
+    height: auto;
+    max-height: 8;
+}
+
+#note_meta {
+    color: cadetblue;
+    padding-top: 1;
+}
+
 #modal_box Input {
     background: #111;
     border-top: none;
@@ -445,7 +459,17 @@ StepScreen Label {
     padding-top: 1;
 }
 
+#note_nav_btns {
+    height: auto;
+    align: center middle;
+    padding-top: 1;
+}
+
 #modal_btns Button {
+    margin: 0 1;
+}
+
+#note_nav_btns Button {
     margin: 0 1;
 }
 

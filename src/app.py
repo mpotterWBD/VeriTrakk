@@ -5,6 +5,7 @@ toolbar-driven navigation, and CSV-backed data model.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -175,35 +176,160 @@ class DirOnlyTree(DirectoryTree):
 # ── Modal Screens ─────────────────────────────────────────────────────────────
 
 class NoteScreen(ModalScreen):
-    """Add or edit a note on a step."""
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    """Add/edit multiple timestamped notes with keyboard navigation."""
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "prev_note", "Previous Note", show=False),
+        Binding("down", "next_note", "Next Note", show=False),
+    ]
 
     def __init__(self, current_note: str = "") -> None:
         super().__init__()
-        self._current = current_note
+        self._notes = self._parse_notes(current_note)
+        # Cursor points at a note index, or at len(_notes) for the draft slot.
+        self._idx = len(self._notes)
+
+    @staticmethod
+    def _parse_notes(current_note: str) -> list[tuple[str, str]]:
+        notes: list[tuple[str, str]] = []
+        for raw in current_note.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            m = re.match(r"^\[(.*?)\]\s*(.*)$", line)
+            if m:
+                notes.append((m.group(1).strip(), m.group(2).strip()))
+            else:
+                # Legacy un-timestamped notes become editable notes.
+                notes.append(("", line))
+        return notes
+
+    def _serialize_notes(self) -> str:
+        out: list[str] = []
+        for ts, text in self._notes:
+            if not text:
+                continue
+            stamp = ts or datetime.now().strftime("%Y-%m-%d %H:%M")
+            out.append(f"[{stamp}] {text}")
+        return "\n".join(out)
+
+    def _input(self) -> Input:
+        return self.query_one("#note_inp", Input)
+
+    def _is_draft(self) -> bool:
+        return self._idx >= len(self._notes)
+
+    def _load_current_into_input(self) -> None:
+        inp = self._input()
+        if self._is_draft():
+            inp.value = ""
+        else:
+            inp.value = self._notes[self._idx][1]
+        self._refresh_meta()
+
+    def _refresh_meta(self) -> None:
+        meta = self.query_one("#note_meta", Static)
+        delete_btn = self.query_one("#btn_delete", Button)
+        preview = self.query_one("#note_existing", Static)
+
+        if self._is_draft():
+            meta.update(f"Draft Note {len(self._notes) + 1} of {len(self._notes) + 1}")
+            delete_btn.disabled = True
+        else:
+            ts, _ = self._notes[self._idx]
+            shown_ts = ts or "(will timestamp on save)"
+            meta.update(f"Editing Note {self._idx + 1} of {len(self._notes)}  |  {shown_ts}")
+            delete_btn.disabled = False
+
+        serialized = self._serialize_notes()
+        preview.update(serialized if serialized else "No saved notes yet.")
+
+    def _commit_current(self) -> None:
+        text = self._input().value.strip()
+
+        # Draft slot appends a new timestamped note only when text exists.
+        if self._is_draft():
+            if not text:
+                return
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            self._notes.append((stamp, text))
+            self._idx = len(self._notes)
+            return
+
+        # Existing note: edit text while preserving timestamp.
+        ts, _ = self._notes[self._idx]
+        if text:
+            self._notes[self._idx] = (ts or datetime.now().strftime("%Y-%m-%d %H:%M"), text)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal_box"):
-            yield Static("Add / Edit Note", id="modal_title")
-            yield Input(value=self._current, placeholder="Enter note...", id="note_inp")
+            yield Static("Step Notes", id="modal_title")
+            yield Label("Existing Notes")
+            yield Static("", id="note_existing")
+            yield Static("", id="note_meta")
+            yield Label("Current Note")
+            yield Input(placeholder="Add note...", id="note_inp")
+            with Horizontal(id="note_nav_btns"):
+                yield Button("Up",      variant="default", id="btn_prev")
+                yield Button("Down",    variant="success", id="btn_next")
+                yield Button("Delete",  variant="error",   id="btn_delete")
             with Horizontal(id="modal_btns"):
-                yield Button("Save",   variant="primary", id="btn_save")
-                yield Button("Clear",  variant="warning", id="btn_clear")
+                yield Button("Save",    variant="primary", id="btn_save")
+                yield Button("Clear",   variant="warning", id="btn_clear")
                 yield Button("Cancel",                   id="btn_cancel")
+
+    def on_mount(self) -> None:
+        self._load_current_into_input()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def action_prev_note(self) -> None:
+        self._commit_current()
+        if self._is_draft() and self._notes:
+            self._idx = len(self._notes) - 1
+        elif self._idx > 0:
+            self._idx -= 1
+        self._load_current_into_input()
+
+    def action_next_note(self) -> None:
+        self._commit_current()
+        if self._idx < len(self._notes):
+            self._idx += 1
+        self._load_current_into_input()
+
+    def on_key(self, event) -> None:
+        # Keep Up/Down for note navigation while input is focused.
+        if event.key == "up":
+            self.action_prev_note()
+            event.stop()
+        elif event.key == "down":
+            self.action_next_note()
+            event.stop()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_cancel":
             self.dismiss(None)
+        elif event.button.id == "btn_prev":
+            self.action_prev_note()
+        elif event.button.id == "btn_next":
+            self.action_next_note()
+        elif event.button.id == "btn_delete":
+            if not self._is_draft():
+                del self._notes[self._idx]
+                if self._idx > len(self._notes):
+                    self._idx = len(self._notes)
+                self._load_current_into_input()
         elif event.button.id == "btn_clear":
-            self.dismiss("")
+            self._notes.clear()
+            self._idx = 0
+            self._load_current_into_input()
         elif event.button.id == "btn_save":
-            self.dismiss(self.query_one("#note_inp", Input).value)
+            self._commit_current()
+            self.dismiss(self._serialize_notes())
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value)
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.action_next_note()
 
 
 class ThresholdScreen(ModalScreen):
@@ -925,7 +1051,7 @@ class VeriTrakkApp(App):
             t.append("\u25cb Pending\n", style="dim")
         # Note
         if step.note:
-            t.append("\nNote\n", style="dim")
+            t.append("\nNotes\n", style="dim")
             t.append(step.note, style=_KHAKI)
         # Threshold
         if step.has_threshold():
@@ -1138,12 +1264,15 @@ class VeriTrakkApp(App):
             callback=lambda note: self._on_note_result(step_idx, note),
         )
 
-    def _on_note_result(self, step_idx: int, note: str | None) -> None:
-        if note is None:
+    def _on_note_result(self, step_idx: int, notes_text: str | None) -> None:
+        if notes_text is None:
             return
-        self._process.steps[step_idx].note = note
+        step = self._process.steps[step_idx]
+        step.note = notes_text
+
         save_process(self._process, self._proc_path)
         self._rebuild_proc_tree()
+        self._update_step_info()
 
     # ── File rename helpers ───────────────────────────────────────────────────
     def _mark_complete_file(self) -> None:
