@@ -892,6 +892,7 @@ class VeriTrakkApp(App):
         info = self.query_one("#run_step_info", Static)
         node = tree.cursor_node
         if node is None or node.data is None or not self._process:
+            self._refresh_focus_cursor_state()
             info.update("")
             return
         step = self._process.steps[node.data]
@@ -936,6 +937,22 @@ class VeriTrakkApp(App):
             t.append("\nThreshold\n", style="dim")
             t.append("\n".join(parts), style=_TEAL)
         info.update(t)
+        self._refresh_focus_cursor_state()
+
+    def _refresh_focus_cursor_state(self) -> None:
+        tree = self.query_one("#process_tree", Tree)
+        tree.remove_class("cursor-started")
+
+        if self._mode != "run" or not self._process:
+            return
+
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+
+        step = self._process.steps[node.data]
+        if step.started and not step.completed:
+            tree.add_class("cursor-started")
 
     # ── Run-mode bindings ─────────────────────────────────────────────────────
     def action_complete_step(self) -> None:
@@ -962,6 +979,7 @@ class VeriTrakkApp(App):
             self._rebuild_proc_tree()
             self._refresh_run_sidebar()
             self._refresh_status()
+            self._update_step_info()
             return
 
         # Parent node complete gate: only complete when all sub-steps are done.
@@ -1054,6 +1072,7 @@ class VeriTrakkApp(App):
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
         self._refresh_status()
+        self._update_step_info()
 
     def action_uncomplete_step(self) -> None:
         if self._mode != "run" or not self._process:
@@ -1104,6 +1123,7 @@ class VeriTrakkApp(App):
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
         self._refresh_status()
+        self._update_step_info()
 
     def action_note_step(self) -> None:
         if self._mode != "run" or not self._process:

@@ -342,6 +342,11 @@ Tree > .tree--cursor {
     color: darkseagreen;
 }
 
+#process_tree.cursor-started > .tree--cursor {
+    background: #12223a;
+    color: #6fb4ff;
+}
+
 Tree > .tree--highlight {
     background: transparent;
 }
