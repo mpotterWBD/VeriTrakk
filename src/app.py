@@ -617,7 +617,8 @@ class VeriTrakkApp(App):
             self._build_kind = self._build_proc.kind
         else:
             self._build_path = None
-            self._build_proc = Process(name="New Process", kind=self._build_kind)
+            default_name = "New Work Quest" if self._build_kind == "work_quest" else "New Process"
+            self._build_proc = Process(name=default_name, kind=self._build_kind)
 
         self.query_one("#build_name_inp", Input).value = self._build_proc.name
         self._rebuild_builder_tree()
@@ -664,7 +665,8 @@ class VeriTrakkApp(App):
             return
         self._build_kind = kind
         self._build_path = None
-        self._build_proc = Process(name="New Process", kind=kind)
+        default_name = "New Work Quest" if kind == "work_quest" else "New Process"
+        self._build_proc = Process(name=default_name, kind=kind)
         self._show_build()
 
     def _pick_build_target(self) -> None:
