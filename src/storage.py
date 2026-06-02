@@ -330,7 +330,7 @@ def sanitize_filename_for(name: str, kind: str) -> str:
 
 def generate_log_text(proc: Process) -> str:
     W = 64
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
     is_wq = proc.kind == "work_quest"
 
     def _hours_text(minutes: int) -> str:
@@ -347,7 +347,9 @@ def generate_log_text(proc: Process) -> str:
     if proc.completed_at:
         try:
             dt = datetime.fromisoformat(proc.completed_at)
-            lines.append(f"  Completed: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            lines.append(
+                f"  Completed: {dt.strftime('%Y-%m-%d %I:%M:%S %p').replace(' 0', ' ', 1)}"
+            )
         except ValueError:
             lines.append(f"  Completed: {proc.completed_at}")
     lines += ["=" * W, ""]
@@ -370,7 +372,7 @@ def generate_log_text(proc: Process) -> str:
         if step.completed_at:
             try:
                 dt = datetime.fromisoformat(step.completed_at)
-                ts_str = f"  {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+                ts_str = f"  {dt.strftime('%Y-%m-%d %I:%M:%S %p').replace(' 0', ' ', 1)}"
             except ValueError:
                 ts_str = f"  {step.completed_at}"
 
@@ -404,7 +406,7 @@ def generate_log_text(proc: Process) -> str:
             if sub.completed_at:
                 try:
                     dt = datetime.fromisoformat(sub.completed_at)
-                    sub_ts = f"  {dt.strftime('%H:%M:%S')}"
+                    sub_ts = f"  {dt.strftime('%I:%M:%S %p').lstrip('0')}"
                 except ValueError:
                     sub_ts = f"  {sub.completed_at}"
             sub_line = f"        {sym}  {sub.label}{sub_ts}"

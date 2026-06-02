@@ -110,7 +110,7 @@ def _step_label(
             if step.completed_at:
                 try:
                     dt = datetime.fromisoformat(step.completed_at)
-                    ts = f"   {dt.strftime('%H:%M')}"
+                    ts = f"   {dt.strftime('%I:%M %p').lstrip('0')}"
                 except ValueError:
                     pass
             t = Text(f"\u2713  {step.label}", style=_GREEN)
@@ -1003,13 +1003,13 @@ class VeriTrakkApp(App):
             started_stamps = [sub.started_at for sub in sub_steps if sub.started_at]
             completed_stamps = [sub.completed_at for sub in sub_steps if sub.completed_at]
 
-            any_started = any(sub.started or sub.completed for sub in sub_steps)
             any_in_progress = any(sub.started and not sub.completed for sub in sub_steps)
             any_active = any(sub.started and not sub.completed and not sub.paused for sub in sub_steps)
             all_done = all(sub.completed for sub in sub_steps)
 
-            parent.started = any_started
-            parent.started_at = min(started_stamps) if started_stamps else ""
+            # Parent run-state is derived from children currently in progress.
+            parent.started = any_in_progress
+            parent.started_at = min(started_stamps) if (any_in_progress or all_done) and started_stamps else ""
             parent.completed = all_done
             parent.completed_at = max(completed_stamps) if all_done and completed_stamps else ""
             parent.paused = any_in_progress and not any_active
@@ -1022,6 +1022,9 @@ class VeriTrakkApp(App):
             return None
         for idx, step in enumerate(self._process.steps):
             if exclude_idx is not None and idx == exclude_idx:
+                continue
+            # Parent steps with children are derived state and should never block starts.
+            if step.level == 1 and self._process.sub_steps_of(idx):
                 continue
             if step.started and not step.completed and not step.paused:
                 return idx
@@ -1290,7 +1293,7 @@ class VeriTrakkApp(App):
                 if step.completed_at:
                     try:
                         dt = datetime.fromisoformat(step.completed_at)
-                        ts = f"  {dt.strftime('%H:%M')}"
+                        ts = f"  {dt.strftime('%I:%M %p').lstrip('0')}"
                     except ValueError:
                         pass
                 t.append(f"\u2713 Done{ts}\n", style=_GREEN)
