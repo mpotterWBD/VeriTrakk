@@ -400,10 +400,16 @@ class StepScreen(ModalScreen):
     """Add or edit a task: label, optional note, optional thresholds."""
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, existing: Step | None = None, title: str = "Add Task") -> None:
+    def __init__(
+        self,
+        existing: Step | None = None,
+        title: str = "Add Task",
+        allow_thresholds: bool = True,
+    ) -> None:
         super().__init__()
         self._ex    = existing
         self._title = title
+        self._allow_thresholds = allow_thresholds
 
     def compose(self) -> ComposeResult:
         ex = self._ex
@@ -419,16 +425,17 @@ class StepScreen(ModalScreen):
                 value=ex.note if ex else "",
                 placeholder="Note...", id="step_note",
             )
-            yield Label("Upper Threshold  (optional)")
-            yield Input(
-                value=ex.threshold_upper if ex else "",
-                placeholder="e.g. 5.3", id="step_ut",
-            )
-            yield Label("Lower Threshold  (optional)")
-            yield Input(
-                value=ex.threshold_lower if ex else "",
-                placeholder="e.g. 4.7", id="step_lt",
-            )
+            if self._allow_thresholds:
+                yield Label("Upper Threshold  (optional)")
+                yield Input(
+                    value=ex.threshold_upper if ex else "",
+                    placeholder="e.g. 5.3", id="step_ut",
+                )
+                yield Label("Lower Threshold  (optional)")
+                yield Input(
+                    value=ex.threshold_lower if ex else "",
+                    placeholder="e.g. 4.7", id="step_lt",
+                )
             with Horizontal(id="modal_btns"):
                 yield Button("Save",   variant="primary", id="btn_save")
                 yield Button("Cancel",                   id="btn_cancel")
@@ -449,11 +456,13 @@ class StepScreen(ModalScreen):
         label = self.query_one("#step_label", Input).value.strip()
         if not label:
             return
+        upper = self.query_one("#step_ut", Input).value.strip() if self._allow_thresholds else ""
+        lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
         self.dismiss({
             "label":           label,
             "note":            self.query_one("#step_note", Input).value.strip(),
-            "threshold_upper": self.query_one("#step_ut",   Input).value.strip(),
-            "threshold_lower": self.query_one("#step_lt",   Input).value.strip(),
+            "threshold_upper": upper,
+            "threshold_lower": lower,
         })
 
 
@@ -774,12 +783,23 @@ class VeriTrakkApp(App):
             self._build_proc = Process(name=default_name, kind=self._build_kind)
 
         self.query_one("#build_name_inp", Input).value = self._build_proc.name
+        self._refresh_build_terminology()
         self._rebuild_builder_tree()
         self._update_build_file_label()
         self._switch("side_build", "view_build")
         self._refresh_quest_clock_widgets()
         self._refresh_status()
         self.query_one("#build_name_inp", Input).focus()
+
+    def _build_terms(self) -> tuple[str, str]:
+        if self._build_proc and self._build_proc.kind == "process":
+            return ("Process", "Sub Process")
+        return ("Task", "Sub Task")
+
+    def _refresh_build_terminology(self) -> None:
+        item_term, sub_item_term = self._build_terms()
+        self.query_one("#btn_add_step", Button).label = f"+ {item_term}"
+        self.query_one("#btn_add_sub", Button).label = f"+ {sub_item_term}"
 
     # ── Button handling ───────────────────────────────────────────────────────
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1567,8 +1587,12 @@ class VeriTrakkApp(App):
     def action_add_step(self) -> None:
         if self._mode != "build":
             return
+        item_term, _ = self._build_terms()
         self.push_screen(
-            StepScreen(title="Add Top-Level Task"),
+            StepScreen(
+                title=f"Add Top-Level {item_term}",
+                allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
+            ),
             callback=self._on_add_step,
         )
 
@@ -1595,8 +1619,12 @@ class VeriTrakkApp(App):
     def action_add_sub_step(self) -> None:
         if self._mode != "build":
             return
+        _, sub_item_term = self._build_terms()
         self.push_screen(
-            StepScreen(title="Add Sub Task"),
+            StepScreen(
+                title=f"Add {sub_item_term}",
+                allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
+            ),
             callback=self._on_add_sub,
         )
 
@@ -1630,8 +1658,14 @@ class VeriTrakkApp(App):
         if cur_idx is None:
             return
         step = self._build_proc.steps[cur_idx]
+        item_term, sub_item_term = self._build_terms()
+        edit_term = sub_item_term if step.level == 2 else item_term
         self.push_screen(
-            StepScreen(existing=step, title="Edit Task"),
+            StepScreen(
+                existing=step,
+                title=f"Edit {edit_term}",
+                allow_thresholds=self._build_proc.kind == "process",
+            ),
             callback=lambda d: self._on_edit_step(cur_idx, d),
         )
 
