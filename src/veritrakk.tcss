@@ -347,6 +347,11 @@ Tree > .tree--cursor {
     color: #6fb4ff;
 }
 
+#process_tree.cursor-paused > .tree--cursor {
+    background: #231736;
+    color: #b58cff;
+}
+
 Tree > .tree--highlight {
     background: transparent;
 }
@@ -368,7 +373,8 @@ NoteScreen,
 ThresholdScreen,
 StepScreen,
 ConfirmScreen,
-NewFileTypeScreen {
+NewFileTypeScreen,
+CarrotsScreen {
     align: center middle;
 }
 

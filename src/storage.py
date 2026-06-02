@@ -27,9 +27,12 @@ class Step:
     level: int                # 1 = top-level step, 2 = sub-step
     started: bool = False
     started_at: str = ""      # ISO-8601 string
+    paused: bool = False
+    active_since: str = ""    # ISO-8601 string while actively in progress
     completed: bool = False
     completed_at: str = ""    # ISO-8601 string
     duration_minutes: int = 0
+    duration_seconds: int = 0
     note: str = ""
     threshold_upper: str = ""
     threshold_lower: str = ""
@@ -123,7 +126,7 @@ class Process:
 _FIELDS = [
     "kind", "clocked_in", "clock_active_since", "clock_events",
     "level", "label", "completed", "completed_at",
-    "started", "started_at", "duration_minutes",
+    "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
     "note", "threshold_upper", "threshold_lower", "result",
 ]
 
@@ -140,7 +143,7 @@ def save_process(proc: Process, file_path: Path) -> None:
             "clock_events": json.dumps(proc.clock_events),
             "level": 0, "label": proc.name,
             "completed": proc.completed, "completed_at": proc.completed_at,
-            "started": "", "started_at": "", "duration_minutes": "",
+            "started": "", "started_at": "", "paused": "", "active_since": "", "duration_minutes": "", "duration_seconds": "",
             "note": "", "threshold_upper": "", "threshold_lower": "", "result": "",
         })
         for s in proc.steps:
@@ -153,7 +156,10 @@ def save_process(proc: Process, file_path: Path) -> None:
                 "completed": s.completed, "completed_at": s.completed_at,
                 "started": s.started,
                 "started_at": s.started_at,
+                "paused": s.paused,
+                "active_since": s.active_since,
                 "duration_minutes": s.duration_minutes,
+                "duration_seconds": s.duration_seconds,
                 "note": s.note,
                 "threshold_upper": s.threshold_upper,
                 "threshold_lower": s.threshold_lower,
@@ -199,14 +205,22 @@ def _load_csv(file_path: Path) -> Process:
             duration_minutes = int(dur_raw or "0")
         except ValueError:
             duration_minutes = 0
+        dur_sec_raw = row.get("duration_seconds", "").strip()
+        try:
+            duration_seconds = int(dur_sec_raw) if dur_sec_raw else duration_minutes * 60
+        except ValueError:
+            duration_seconds = duration_minutes * 60
         proc.steps.append(Step(
             label=row["label"],
             level=int(row.get("level", 1)),
             started=row.get("started", "false").lower() == "true",
             started_at=row.get("started_at", ""),
+            paused=row.get("paused", "false").lower() == "true",
+            active_since=row.get("active_since", ""),
             completed=row.get("completed", "false").lower() == "true",
             completed_at=row.get("completed_at", ""),
             duration_minutes=duration_minutes,
+            duration_seconds=duration_seconds,
             note=row.get("note", ""),
             threshold_upper=row.get("threshold_upper", ""),
             threshold_lower=row.get("threshold_lower", ""),
@@ -267,9 +281,12 @@ def _load_legacy(file_path: Path) -> Process:
             level=2 if "[>]|" in raw else 1,
             started=False,
             started_at="",
+            paused=False,
+            active_since="",
             completed="[S]|" in raw,
             completed_at=_ts(raw),
             duration_minutes=0,
+            duration_seconds=0,
             note=_note(raw),
             threshold_upper=ut,
             threshold_lower=lt,

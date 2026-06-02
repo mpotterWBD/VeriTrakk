@@ -35,6 +35,7 @@ _GOLD    = "#daa520"  # goldenrod
 _KHAKI   = "#bdb76b"  # darkkhaki
 _TEAL    = "#5f9ea0"  # cadetblue
 _BLUE    = "#1e90ff"  # dodgerblue
+_PURPLE  = "#9370db"  # mediumpurple
 
 
 # ── Welcome content ───────────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ WELCOME_MD = """\
 | Arrow Right | Mark task **complete** |
 | Arrow Left | Un-mark a task |
 | N | Add / edit a **note** on the selected task |
+| P | Pause / unpause active task |
 
 ## Process Builder
 
@@ -89,7 +91,11 @@ def _progress_bar(pct: float, width: int = 20) -> str:
 
 
 def _step_label(
-    step: Step, *, sub_done: int | None = None, sub_total: int | None = None
+    step: Step,
+    *,
+    sub_done: int | None = None,
+    sub_total: int | None = None,
+    live_seconds: int | None = None,
 ) -> Text:
     """Rich Text label for a step node in the run-mode tree."""
     if step.completed:
@@ -114,8 +120,23 @@ def _step_label(
                 h = step.duration_minutes // 60
                 m = step.duration_minutes % 60
                 t.append(f"   {h:02d}:{m:02d}", style=f"dim {_TEAL}")
+    elif step.started and step.paused:
+        t = Text(f"\u25d4  {step.label}", style=f"bold {_PURPLE}")
+        t.append("   PAUSED", style=f"bold {_PURPLE}")
+        if live_seconds is not None and live_seconds > 0:
+            h = live_seconds // 3600
+            m = (live_seconds % 3600) // 60
+            s = live_seconds % 60
+            t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
+        if sub_done is not None and sub_total:
+            t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     elif step.started:
         t = Text(f"\u25d4  {step.label}", style=f"bold {_BLUE}")
+        if live_seconds is not None and live_seconds > 0:
+            h = live_seconds // 3600
+            m = (live_seconds % 3600) // 60
+            s = live_seconds % 60
+            t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     else:
@@ -576,6 +597,7 @@ class VeriTrakkApp(App):
         Binding("right", "complete_step",   "Complete",  show=False, priority=True),
         Binding("left",  "uncomplete_step", "Un-do",     show=False, priority=True),
         Binding("n",     "note_step",       "Note",      show=True),
+        Binding("p",     "pause_step",      "Pause",     show=True),
         Binding("c",     "toggle_clock",    "Clock In/Out", show=True),
         # Build-mode actions
         Binding("a",      "add_step",     "Add Task", show=False),
@@ -672,7 +694,7 @@ class VeriTrakkApp(App):
         build_tree = self.query_one("#builder_tree", Tree)
         build_tree.auto_expand = False
         build_tree.root.expand()
-        self.set_interval(30, self._tick_clock)
+        self.set_interval(1, self._tick_clock)
         self._show_home()
 
     # ── Mode management ───────────────────────────────────────────────────────
@@ -837,8 +859,13 @@ class VeriTrakkApp(App):
         )
 
     def _tick_clock(self) -> None:
+        if self._mode != "run" or not self._process:
+            return
         if self._is_work_quest_active():
             self._refresh_quest_clock_widgets()
+        self._refresh_proc_tree_live()
+        self._refresh_status()
+        self._update_step_info()
 
     def _format_minutes(self, minutes: int) -> str:
         h = max(0, minutes // 60)
@@ -846,8 +873,15 @@ class VeriTrakkApp(App):
         # Keep Digits fixed-width for readability.
         return f"{str(h).zfill(2)}:{str(m).zfill(2)}"
 
-    def _work_quest_minutes_between(self, proc: Process, started_at: str, ended_at: datetime) -> int:
-        """Minutes between start/end that overlap work-quest clocked-in windows."""
+    def _format_seconds(self, total_seconds: int) -> str:
+        total = max(0, total_seconds)
+        h = total // 3600
+        m = (total % 3600) // 60
+        s = total % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _work_quest_seconds_between(self, proc: Process, started_at: str, ended_at: datetime) -> int:
+        """Seconds between start/end that overlap work-quest clocked-in windows."""
         try:
             start_dt = datetime.fromisoformat(started_at)
         except ValueError:
@@ -886,7 +920,53 @@ class VeriTrakkApp(App):
             if overlap_end > overlap_start:
                 total_seconds += int((overlap_end - overlap_start).total_seconds())
 
-        return max(0, total_seconds // 60)
+        return max(0, total_seconds)
+
+    def _work_quest_minutes_between(self, proc: Process, started_at: str, ended_at: datetime) -> int:
+        """Minutes between start/end that overlap work-quest clocked-in windows."""
+        return self._work_quest_seconds_between(proc, started_at, ended_at) // 60
+
+    def _live_step_seconds(self, step: Step, now: datetime | None = None) -> int:
+        total = max(0, step.duration_seconds)
+        if (
+            self._process
+            and self._process.kind == "work_quest"
+            and step.started
+            and not step.completed
+            and not step.paused
+            and step.active_since
+        ):
+            ended_at = now or datetime.now()
+            total += self._work_quest_seconds_between(self._process, step.active_since, ended_at)
+        return max(0, total)
+
+    def _sync_duration_minutes(self, step: Step) -> None:
+        step.duration_minutes = max(0, step.duration_seconds // 60)
+
+    def _active_step_idx(self, *, exclude_idx: int | None = None) -> int | None:
+        if not self._process:
+            return None
+        for idx, step in enumerate(self._process.steps):
+            if exclude_idx is not None and idx == exclude_idx:
+                continue
+            if step.started and not step.completed and not step.paused:
+                return idx
+        return None
+
+    def _accumulate_active_minutes(self, step_idx: int, now: datetime | None = None) -> None:
+        if not self._process:
+            return
+        step = self._process.steps[step_idx]
+        if not step.active_since:
+            return
+        ended_at = now or datetime.now()
+        step.duration_seconds += self._work_quest_seconds_between(
+            self._process,
+            step.active_since,
+            ended_at,
+        )
+        self._sync_duration_minutes(step)
+        step.active_since = ""
 
     def _refresh_quest_clock_widgets(self) -> None:
         strip = self.query_one("#run_clock_strip", Horizontal)
@@ -987,6 +1067,7 @@ class VeriTrakkApp(App):
         tree.root.data = None
 
         i = 0
+        now = datetime.now()
         while i < len(proc.steps):
             step = proc.steps[i]
             if step.level != 1:
@@ -1004,17 +1085,72 @@ class VeriTrakkApp(App):
                 sub_total = j - i - 1
                 should_expand = i not in collapsed
                 node = tree.root.add(
-                    _step_label(step, sub_done=sub_done, sub_total=sub_total),
+                    _step_label(
+                        step,
+                        sub_done=sub_done,
+                        sub_total=sub_total,
+                        live_seconds=self._live_step_seconds(step, now),
+                    ),
                     data=i, expand=should_expand,
                 )
                 for k in range(i + 1, j):
-                    node.add_leaf(_step_label(proc.steps[k]), data=k)
+                    sub = proc.steps[k]
+                    node.add_leaf(
+                        _step_label(sub, live_seconds=self._live_step_seconds(sub, now)),
+                        data=k,
+                    )
             else:
-                tree.root.add_leaf(_step_label(step), data=i)
+                tree.root.add_leaf(
+                    _step_label(step, live_seconds=self._live_step_seconds(step, now)),
+                    data=i,
+                )
 
             i = j
 
         tree.root.expand()
+
+    def _refresh_proc_tree_live(self) -> None:
+        if self._mode != "run" or not self._process:
+            return
+        tree = self.query_one("#process_tree", Tree)
+        proc = self._process
+        now = datetime.now()
+
+        for top_node in tree.root.children:
+            if top_node.data is None:
+                continue
+            top_idx = top_node.data
+            step = proc.steps[top_idx]
+
+            if top_node.children:
+                subs = proc.sub_steps_of(top_idx)
+                sub_done = sum(1 for _, sub in subs if sub.completed)
+                sub_total = len(subs)
+                top_node.set_label(
+                    _step_label(
+                        step,
+                        sub_done=sub_done,
+                        sub_total=sub_total,
+                        live_seconds=self._live_step_seconds(step, now),
+                    )
+                )
+                for sub_node in top_node.children:
+                    if sub_node.data is None:
+                        continue
+                    sub_step = proc.steps[sub_node.data]
+                    sub_node.set_label(
+                        _step_label(
+                            sub_step,
+                            live_seconds=self._live_step_seconds(sub_step, now),
+                        )
+                    )
+            else:
+                top_node.set_label(
+                    _step_label(
+                        step,
+                        live_seconds=self._live_step_seconds(step, now),
+                    )
+                )
 
     def _refresh_run_sidebar(self) -> None:
         if not self._process:
@@ -1088,7 +1224,14 @@ class VeriTrakkApp(App):
                     style=_TEAL,
                 )
         elif step.started:
-            t.append("\u25d4 In Progress\n", style=f"bold {_BLUE}")
+            if step.paused:
+                t.append("\u25d4 Paused\n", style=f"bold {_PURPLE}")
+            else:
+                t.append("\u25d4 In Progress\n", style=f"bold {_BLUE}")
+            t.append(
+                f"Duration {self._format_seconds(self._live_step_seconds(step))}\n",
+                style=_TEAL,
+            )
         else:
             t.append("\u25cb Pending\n", style="dim")
         # Note
@@ -1110,6 +1253,7 @@ class VeriTrakkApp(App):
     def _refresh_focus_cursor_state(self) -> None:
         tree = self.query_one("#process_tree", Tree)
         tree.remove_class("cursor-started")
+        tree.remove_class("cursor-paused")
 
         if self._mode != "run" or not self._process:
             return
@@ -1120,7 +1264,10 @@ class VeriTrakkApp(App):
 
         step = self._process.steps[node.data]
         if step.started and not step.completed:
-            tree.add_class("cursor-started")
+            if step.paused:
+                tree.add_class("cursor-paused")
+            else:
+                tree.add_class("cursor-started")
 
     # ── Run-mode bindings ─────────────────────────────────────────────────────
     def action_complete_step(self) -> None:
@@ -1141,8 +1288,15 @@ class VeriTrakkApp(App):
 
         # Work quest flow: first right starts, second right completes.
         if self._process.kind == "work_quest" and not step.started:
+            active_idx = self._active_step_idx(exclude_idx=step_idx)
+            if active_idx is not None:
+                self.notify("You must pause a task in order to do a new one.", severity="warning")
+                return
             step.started = True
-            step.started_at = datetime.now().isoformat()
+            step.paused = False
+            now_iso = datetime.now().isoformat()
+            step.started_at = step.started_at or now_iso
+            step.active_since = now_iso
             save_process(self._process, self._proc_path)
             self._rebuild_proc_tree()
             self._refresh_run_sidebar()
@@ -1195,18 +1349,22 @@ class VeriTrakkApp(App):
         now = datetime.now()
 
         if proc.kind == "work_quest" and not step.started:
+            active_idx = self._active_step_idx(exclude_idx=step_idx)
+            if active_idx is not None:
+                self.notify("You must pause a task in order to do a new one.", severity="warning")
+                return
             step.started = True
-            step.started_at = now.isoformat()
+            step.paused = False
+            step.started_at = step.started_at or now.isoformat()
+            step.active_since = step.active_since or now.isoformat()
 
-        if proc.kind == "work_quest" and step.started_at:
-            step.duration_minutes = self._work_quest_minutes_between(
-                proc,
-                step.started_at,
-                now,
-            )
+        if proc.kind == "work_quest" and step.active_since:
+            self._accumulate_active_minutes(step_idx, now)
 
         step.completed    = True
         step.completed_at = now.isoformat()
+        step.paused       = False
+        step.active_since = ""
         step.result       = result
 
         # Auto-complete parent if all siblings are done
@@ -1221,12 +1379,10 @@ class VeriTrakkApp(App):
                     if proc.kind == "work_quest":
                         if not parent.started and parent.started_at:
                             parent.started = True
-                        if parent.started_at:
-                            parent.duration_minutes = self._work_quest_minutes_between(
-                                proc,
-                                parent.started_at,
-                                now,
-                            )
+                        if parent.active_since:
+                            self._accumulate_active_minutes(parent_idx, now)
+                        parent.paused = False
+                        parent.active_since = ""
 
         # Check if the whole process is done
         if proc.is_fully_complete() and not proc.completed:
@@ -1264,10 +1420,13 @@ class VeriTrakkApp(App):
         # Revert to "not even started".
         step.started      = False
         step.started_at   = ""
+        step.paused       = False
+        step.active_since = ""
         step.completed    = False
         step.completed_at = ""
         step.result       = ""
         step.duration_minutes = 0
+        step.duration_seconds = 0
 
         # Un-complete parent if it was auto-completed
         if step.level == 2:
@@ -1276,9 +1435,12 @@ class VeriTrakkApp(App):
                 parent = proc.steps[parent_idx]
                 parent.started      = False
                 parent.started_at   = ""
+                parent.paused       = False
+                parent.active_since = ""
                 parent.completed    = False
                 parent.completed_at = ""
                 parent.duration_minutes = 0
+                parent.duration_seconds = 0
 
         if proc.completed:
             proc.completed    = False
@@ -1303,6 +1465,37 @@ class VeriTrakkApp(App):
             NoteScreen(current_note=self._process.steps[step_idx].note),
             callback=lambda note: self._on_note_result(step_idx, note),
         )
+
+    def action_pause_step(self) -> None:
+        if self._mode != "run" or not self._process or self._process.kind != "work_quest":
+            return
+        tree = self.query_one("#process_tree", Tree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+
+        step_idx = node.data
+        step = self._process.steps[step_idx]
+        if not step.started or step.completed:
+            return
+
+        now = datetime.now()
+        if step.paused:
+            active_idx = self._active_step_idx(exclude_idx=step_idx)
+            if active_idx is not None:
+                self.notify("You must pause a task in order to do a new one.", severity="warning")
+                return
+            step.paused = False
+            step.active_since = now.isoformat()
+        else:
+            self._accumulate_active_minutes(step_idx, now)
+            step.paused = True
+
+        save_process(self._process, self._proc_path)
+        self._rebuild_proc_tree()
+        self._refresh_run_sidebar()
+        self._refresh_status()
+        self._update_step_info()
 
     def _on_note_result(self, step_idx: int, notes_text: str | None) -> None:
         if notes_text is None:
@@ -1556,7 +1749,7 @@ class VeriTrakkApp(App):
 
     # ── Binding guards ────────────────────────────────────────────────────────
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        if action in ("complete_step", "uncomplete_step", "note_step"):
+        if action in ("complete_step", "uncomplete_step", "note_step", "pause_step"):
             return self._mode == "run"
         if action == "toggle_clock":
             return self._mode == "run"
