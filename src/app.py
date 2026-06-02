@@ -1817,6 +1817,11 @@ class VeriTrakkApp(App):
                 save_session(file_path.parent, "")
             self._set_mode("logs")
             self._view_log(log_path)
+            status = Text("  LOG  ", style="dim")
+            status.append(log_path.name, style=f"bold {_SALMON}")
+            status.append("    PDF  ", style="dim")
+            status.append(log_path.name + ".pdf", style=f"bold {_TEAL}")
+            self.query_one("#status_bar", Static).update(status)
         except OSError:
             pass
 

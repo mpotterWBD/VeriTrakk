@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import textwrap
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,16 @@ _APP_ROOT    = Path(__file__).resolve().parent.parent
 DATA_DIR     = _APP_ROOT / "data"
 LOGS_DIR     = DATA_DIR / "logs"
 SESSION_FILE = DATA_DIR / "session.json"
+
+
+def _rgb255(red: int, green: int, blue: int) -> tuple[float, float, float]:
+    return (red / 255.0, green / 255.0, blue / 255.0)
+
+
+# PDF text color knobs. Change these three values to retune the exported PDF.
+PDF_NOTE_TEXT_COLOR = _rgb255(200, 70, 0)
+PDF_SUBTASK_TEXT_COLOR = _rgb255(0, 90, 210)
+PDF_SUBTASK_NOTE_TEXT_COLOR = _rgb255(160, 40, 190)
 
 
 # ── Data Model ────────────────────────────────────────────────────────────────
@@ -328,13 +339,302 @@ def sanitize_filename_for(name: str, kind: str) -> str:
 
 # ── Log generation / publishing ───────────────────────────────────────────────
 
-def generate_log_text(proc: Process) -> str:
-    W = 64
-    now = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
-    is_wq = proc.kind == "work_quest"
+def _hours_text(minutes: int) -> str:
+    return f"{minutes / 60:.2f} h"
 
-    def _hours_text(minutes: int) -> str:
-        return f"{minutes / 60:.2f} h"
+
+def _format_log_timestamp(value: str) -> str:
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return dt.strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
+
+
+def _pdf_escape(text: str) -> str:
+    return (
+        text.replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+        .replace("\r", "")
+        .replace("\n", " ")
+    )
+
+
+def _pdf_stream_text(x: float, y: float, text: str, *, font: str, size: int, rgb: tuple[float, float, float]) -> str:
+    r, g, b = rgb
+    return (
+        "BT\n"
+        f"/{font} {size} Tf\n"
+        f"{r:.3f} {g:.3f} {b:.3f} rg\n"
+        f"1 0 0 1 {x:.2f} {y:.2f} Tm\n"
+        f"({_pdf_escape(text)}) Tj\n"
+        "ET"
+    )
+
+
+def _pdf_stream_rect(x: float, y: float, width: float, height: float, *, fill_rgb: tuple[float, float, float] | None = None, stroke_rgb: tuple[float, float, float] | None = None, line_width: float = 1.0) -> str:
+    parts: list[str] = ["q"]
+    if fill_rgb is not None:
+        parts.append(f"{fill_rgb[0]:.3f} {fill_rgb[1]:.3f} {fill_rgb[2]:.3f} rg")
+    if stroke_rgb is not None:
+        parts.append(f"{stroke_rgb[0]:.3f} {stroke_rgb[1]:.3f} {stroke_rgb[2]:.3f} RG")
+        parts.append(f"{line_width:.2f} w")
+    parts.append(f"{x:.2f} {y:.2f} {width:.2f} {height:.2f} re")
+    if fill_rgb is not None and stroke_rgb is not None:
+        parts.append("B")
+    elif fill_rgb is not None:
+        parts.append("f")
+    else:
+        parts.append("S")
+    parts.append("Q")
+    return "\n".join(parts)
+
+
+def _build_pdf_document(page_streams: list[str]) -> bytes:
+    objects: list[bytes] = []
+
+    def add_object(payload: str | bytes) -> int:
+        data = payload.encode("latin-1") if isinstance(payload, str) else payload
+        objects.append(data)
+        return len(objects)
+
+    font_regular = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    font_bold = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+    font_oblique = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>")
+
+    page_ids: list[int] = []
+    content_ids: list[int] = []
+    pages_id_placeholder = len(objects) + 1
+    add_object(b"")
+
+    for stream in page_streams:
+        stream_bytes = stream.encode("latin-1")
+        content_id = add_object(
+            b"<< /Length " + str(len(stream_bytes)).encode("ascii") + b" >>\nstream\n" + stream_bytes + b"\nendstream"
+        )
+        content_ids.append(content_id)
+        page_id = add_object(
+            "<< /Type /Page /Parent {pages} 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 {font_regular} 0 R /F2 {font_bold} 0 R /F3 {font_oblique} 0 R >> >> "
+            f"/Contents {content_id} 0 R >>"
+        )
+        page_ids.append(page_id)
+
+    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+    objects[pages_id_placeholder - 1] = (
+        f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("latin-1")
+    )
+    catalog_id = add_object(f"<< /Type /Catalog /Pages {pages_id_placeholder} 0 R >>")
+
+    pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for idx, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{idx} 0 obj\n".encode("ascii"))
+        if idx in page_ids:
+            page_text = obj.decode("latin-1").replace("{pages}", str(pages_id_placeholder))
+            pdf.extend(page_text.encode("latin-1"))
+        else:
+            pdf.extend(obj)
+        pdf.extend(b"\nendobj\n")
+
+    xref_start = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\n"
+            f"startxref\n{xref_start}\n%%EOF"
+        ).encode("ascii")
+    )
+    return bytes(pdf)
+
+
+def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) -> bytes:
+    published_dt = published_at or datetime.now()
+    published_text = published_dt.strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
+    is_wq = proc.kind == "work_quest"
+    title = "WORK QUEST LOG" if is_wq else "PROCESS LOG"
+    subject = "Work Quest" if is_wq else "Process"
+    total_minutes = proc.total_clock_minutes() if is_wq else sum(step.duration_minutes for step in proc.steps)
+
+    page_width = 612.0
+    page_height = 792.0
+    margin = 48.0
+    content_width = page_width - margin * 2
+    note_color = PDF_NOTE_TEXT_COLOR
+    subtask_color = PDF_SUBTASK_TEXT_COLOR
+    subtask_note_color = PDF_SUBTASK_NOTE_TEXT_COLOR
+    pages: list[list[str]] = [[]]
+    cursor_top = margin
+
+    def new_page() -> None:
+        nonlocal cursor_top
+        pages.append([])
+        cursor_top = margin
+
+    def ensure_space(height: float) -> None:
+        nonlocal cursor_top
+        if cursor_top + height > page_height - margin:
+            new_page()
+
+    def draw_rect(top: float, height: float, *, fill_rgb: tuple[float, float, float] | None = None, stroke_rgb: tuple[float, float, float] | None = None, x: float = margin, width: float = content_width, line_width: float = 1.0) -> None:
+        y = page_height - top - height
+        pages[-1].append(
+            _pdf_stream_rect(x, y, width, height, fill_rgb=fill_rgb, stroke_rgb=stroke_rgb, line_width=line_width)
+        )
+
+    def draw_text(top: float, text: str, *, size: int = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin) -> None:
+        baseline = page_height - top - size
+        pages[-1].append(_pdf_stream_text(x, baseline, text, font=font, size=size, rgb=rgb))
+
+    def write_lines(lines: list[str], *, size: int = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin, line_gap: float = 4.0) -> None:
+        nonlocal cursor_top
+        step = size + line_gap
+        ensure_space(len(lines) * step)
+        for line in lines:
+            draw_text(cursor_top, line, size=size, font=font, rgb=rgb, x=x)
+            cursor_top += step
+
+    def write_wrapped(text: str, *, prefix: str = "", size: int = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin, width_chars: int = 78, line_gap: float = 4.0) -> None:
+        lines: list[str] = []
+        source_lines = text.splitlines() or [""]
+        for raw in source_lines:
+            wrapped = textwrap.wrap(raw, width=width_chars, subsequent_indent=" " * len(prefix)) or [""]
+            if prefix:
+                wrapped[0] = prefix + wrapped[0]
+                prefix = " " * len(prefix)
+            lines.extend(wrapped)
+        write_lines(lines, size=size, font=font, rgb=rgb, x=x, line_gap=line_gap)
+
+    ensure_space(96)
+    draw_rect(cursor_top, 72, fill_rgb=(0.13, 0.34, 0.46))
+    draw_text(cursor_top + 14, "VERITRAKK", size=13, font="F2", rgb=(0.86, 0.92, 0.95), x=margin + 18)
+    draw_text(cursor_top + 34, title, size=24, font="F2", rgb=(1.0, 1.0, 1.0), x=margin + 18)
+    draw_text(cursor_top + 58, f"Published {published_text}", size=10, font="F3", rgb=(0.86, 0.92, 0.95), x=margin + 18)
+    cursor_top += 88
+
+    meta_height = 112 if proc.completed_at else 94
+    ensure_space(meta_height + 12)
+    draw_rect(cursor_top, meta_height, fill_rgb=(0.96, 0.96, 0.95), stroke_rgb=(0.84, 0.84, 0.82))
+    meta_lines = [
+        f"{subject}: {proc.name}",
+        f"Top-level tasks completed: {proc.done_top} / {proc.total_top}",
+        f"Recorded time: {_hours_text(total_minutes)} ({total_minutes} min)",
+    ]
+    if proc.completed_at:
+        meta_lines.append(f"Completed: {_format_log_timestamp(proc.completed_at)}")
+    if proc.clock_events:
+        meta_lines.append(f"Clock events captured: {len(proc.clock_events)}")
+    draw_text(cursor_top + 14, "Summary", size=13, font="F2", rgb=(0.16, 0.20, 0.24), x=margin + 16)
+    y_meta = cursor_top + 38
+    for line in meta_lines:
+        draw_text(y_meta, line, size=11, font="F1", rgb=(0.18, 0.20, 0.23), x=margin + 16)
+        y_meta += 18
+    cursor_top += meta_height + 18
+
+    i = 0
+    while i < len(proc.steps):
+        step = proc.steps[i]
+        if step.level != 1:
+            i += 1
+            continue
+
+        sub_steps: list[Step] = []
+        j = i + 1
+        while j < len(proc.steps) and proc.steps[j].level == 2:
+            sub_steps.append(proc.steps[j])
+            j += 1
+
+        block_lines = 4
+        if is_wq:
+            block_lines += 1
+        if step.threshold_upper or step.threshold_lower:
+            block_lines += 1
+        if step.note:
+            note_lines = sum(
+                max(1, len(textwrap.wrap(line, width=68)))
+                for line in step.note.splitlines() or [step.note]
+            )
+            block_lines += note_lines
+        for sub in sub_steps:
+            block_lines += 1
+            if sub.note:
+                block_lines += sum(
+                    max(1, len(textwrap.wrap(line, width=62)))
+                    for line in sub.note.splitlines() or [sub.note]
+                )
+        block_height = 26 + block_lines * 16
+        ensure_space(block_height + 12)
+        draw_rect(cursor_top, block_height, fill_rgb=(0.995, 0.995, 0.99), stroke_rgb=(0.87, 0.87, 0.84))
+
+        status = step.result or ("COMPLETE" if step.completed else "PENDING")
+        status_color = (0.18, 0.53, 0.34) if status in ("PASS", "COMPLETE") else (0.74, 0.20, 0.18) if status == "FAIL" else (0.66, 0.50, 0.12)
+        draw_text(cursor_top + 14, step.label, size=14, font="F2", rgb=(0.12, 0.15, 0.17), x=margin + 16)
+        draw_text(cursor_top + 15, status, size=10, font="F2", rgb=status_color, x=margin + content_width - 92)
+
+        block_top = cursor_top + 38
+        details = [f"Status: {status}"]
+        if step.completed_at:
+            details.append(f"Completed: {_format_log_timestamp(step.completed_at)}")
+        elif step.started_at:
+            details.append(f"Started: {_format_log_timestamp(step.started_at)}")
+        if is_wq or step.duration_minutes:
+            details.append(f"Step time: {_hours_text(step.duration_minutes)} ({step.duration_minutes} min)")
+        if step.threshold_upper or step.threshold_lower:
+            threshold_parts: list[str] = []
+            if step.threshold_upper:
+                threshold_parts.append(f"Upper <= {step.threshold_upper}")
+            if step.threshold_lower:
+                threshold_parts.append(f"Lower >= {step.threshold_lower}")
+            details.append("Thresholds: " + " | ".join(threshold_parts))
+        for line in details:
+            draw_text(block_top, line, size=11, font="F1", rgb=(0.22, 0.24, 0.27), x=margin + 16)
+            block_top += 16
+
+        if step.note:
+            cursor_snapshot = cursor_top
+            cursor_top = block_top
+            write_wrapped(step.note, prefix="Note: ", size=10, font="F2", rgb=note_color, x=margin + 16, width_chars=70, line_gap=3)
+            block_top = cursor_top
+            cursor_top = cursor_snapshot
+
+        if sub_steps:
+            draw_text(block_top + 2, "Subtasks", size=11, font="F2", rgb=subtask_color, x=margin + 16)
+            block_top += 18
+            cursor_snapshot = cursor_top
+            cursor_top = block_top
+            for sub in sub_steps:
+                sub_status = sub.result or ("DONE" if sub.completed else "OPEN")
+                sub_line = f"- [{sub_status}] {sub.label}"
+                if sub.completed_at:
+                    sub_line += f"  |  {_format_log_timestamp(sub.completed_at)}"
+                if is_wq or sub.duration_minutes:
+                    sub_line += f"  |  {_hours_text(sub.duration_minutes)} ({sub.duration_minutes} min)"
+                write_wrapped(sub_line, size=10, font="F2", rgb=subtask_color, x=margin + 28, width_chars=66, line_gap=3)
+                if sub.note:
+                    write_wrapped(sub.note, prefix="  note: ", size=9, font="F2", rgb=subtask_note_color, x=margin + 40, width_chars=60, line_gap=3)
+            block_top = cursor_top
+            cursor_top = cursor_snapshot
+
+        cursor_top += block_height + 12
+        i = j
+
+    ensure_space(44)
+    draw_rect(cursor_top, 32, fill_rgb=(0.95, 0.96, 0.97))
+    footer = f"Completion summary: {proc.done_top}/{proc.total_top} top-level tasks complete"
+    draw_text(cursor_top + 10, footer, size=10, font="F2", rgb=(0.16, 0.20, 0.24), x=margin + 14)
+
+    return _build_pdf_document(["\n".join(page) for page in pages if page])
+
+
+def generate_log_text(proc: Process, published_at: datetime | None = None) -> str:
+    W = 64
+    now = (published_at or datetime.now()).strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
+    is_wq = proc.kind == "work_quest"
 
     title = "  VERITRAKK  -  WORK QUEST LOG" if is_wq else "  VERITRAKK  -  PROCESS LOG"
     lines: list[str] = [
@@ -437,16 +737,22 @@ def generate_log_text(proc: Process) -> str:
 
 
 def publish_process(proc: Process, src_path: Path) -> Path:
-    """Write a log file, copy to data/logs/, delete source. Returns the log path."""
-    log_text = generate_log_text(proc)
+    """Write text and PDF logs, copy them to data/logs/, delete source. Returns the text log path."""
+    published_at = datetime.now()
+    log_text = generate_log_text(proc, published_at)
+    pdf_bytes = generate_log_pdf_bytes(proc, published_at)
     stem     = src_path.stem.replace("#COMPLETE", "").strip()
     log_name = stem + (".wrkqstlog" if src_path.suffix == ".wrkqst" else ".prcsslog")
+    pdf_name = log_name + ".pdf"
     log_path = src_path.parent / log_name
+    pdf_path = src_path.parent / pdf_name
 
     log_path.write_text(log_text, encoding="utf-8")
+    pdf_path.write_bytes(pdf_bytes)
 
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     (LOGS_DIR / log_name).write_text(log_text, encoding="utf-8")
+    (LOGS_DIR / pdf_name).write_bytes(pdf_bytes)
 
     if src_path.exists():
         src_path.unlink()

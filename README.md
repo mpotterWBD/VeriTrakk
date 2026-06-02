@@ -4,6 +4,8 @@
 ## Project Description
 This application is a structured process-control checklist tool that enforces and documents the completion of required steps prior to process finalization
 
+Logging a completed process or work quest now creates both the plain-text archive log and a formatted PDF summary.
+
 ### Development Setup
 
 1. git clone https://github.com/mpotterWBD/VeriTrakk.git
