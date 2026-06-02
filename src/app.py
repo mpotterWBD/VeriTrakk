@@ -116,7 +116,12 @@ def _step_label(
             t = Text(f"\u2713  {step.label}", style=_GREEN)
             if ts:
                 t.append(ts, style=f"dim {_GREEN}")
-            if step.duration_minutes > 0:
+            if live_seconds is not None and live_seconds > 0:
+                h = live_seconds // 3600
+                m = (live_seconds % 3600) // 60
+                s = live_seconds % 60
+                t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
+            elif step.duration_minutes > 0:
                 h = step.duration_minutes // 60
                 m = step.duration_minutes % 60
                 t.append(f"   {h:02d}:{m:02d}", style=f"dim {_TEAL}")
@@ -141,6 +146,11 @@ def _step_label(
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     else:
         t = Text(f"\u25cb  {step.label}")
+        if live_seconds is not None and live_seconds > 0:
+            h = live_seconds // 3600
+            m = (live_seconds % 3600) // 60
+            s = live_seconds % 60
+            t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
         if step.has_threshold():
@@ -779,10 +789,15 @@ class VeriTrakkApp(App):
             self._build_kind = self._build_proc.kind
         else:
             self._build_path = None
+            self._build_dir = None
             default_name = "New Work Quest" if self._build_kind == "work_quest" else "New Process"
             self._build_proc = Process(name=default_name, kind=self._build_kind)
 
-        self.query_one("#build_name_inp", Input).value = self._build_proc.name
+        name_inp = self.query_one("#build_name_inp", Input)
+        name_inp.placeholder = (
+            "Work Quest name..." if self._build_proc.kind == "work_quest" else "Process name..."
+        )
+        name_inp.value = self._build_proc.name
         self._refresh_build_terminology()
         self._rebuild_builder_tree()
         self._update_build_file_label()
@@ -868,6 +883,7 @@ class VeriTrakkApp(App):
         self._process   = proc
         self._proc_path = file_path
         self._build_dir = file_path.parent
+        self._sync_parent_states_from_children()
         save_session(file_path.parent, file_path.name)
         self._show_run()
 
@@ -946,7 +962,18 @@ class VeriTrakkApp(App):
         """Minutes between start/end that overlap work-quest clocked-in windows."""
         return self._work_quest_seconds_between(proc, started_at, ended_at) // 60
 
-    def _live_step_seconds(self, step: Step, now: datetime | None = None) -> int:
+    def _live_step_seconds(self, step_idx: int, now: datetime | None = None) -> int:
+        if not self._process:
+            return 0
+
+        step = self._process.steps[step_idx]
+
+        # For top-level parent steps, show rolled-up sub-step time live.
+        if step.level == 1:
+            subs = self._process.sub_steps_of(step_idx)
+            if subs:
+                return max(0, sum(self._live_step_seconds(sub_idx, now) for sub_idx, _ in subs))
+
         total = max(0, step.duration_seconds)
         if (
             self._process
@@ -962,6 +989,33 @@ class VeriTrakkApp(App):
 
     def _sync_duration_minutes(self, step: Step) -> None:
         step.duration_minutes = max(0, step.duration_seconds // 60)
+
+    def _sync_parent_states_from_children(self) -> None:
+        if not self._process:
+            return
+        proc = self._process
+        for idx, parent in proc.top_steps:
+            subs = proc.sub_steps_of(idx)
+            if not subs:
+                continue
+
+            sub_steps = [sub for _, sub in subs]
+            started_stamps = [sub.started_at for sub in sub_steps if sub.started_at]
+            completed_stamps = [sub.completed_at for sub in sub_steps if sub.completed_at]
+
+            any_started = any(sub.started or sub.completed for sub in sub_steps)
+            any_in_progress = any(sub.started and not sub.completed for sub in sub_steps)
+            any_active = any(sub.started and not sub.completed and not sub.paused for sub in sub_steps)
+            all_done = all(sub.completed for sub in sub_steps)
+
+            parent.started = any_started
+            parent.started_at = min(started_stamps) if started_stamps else ""
+            parent.completed = all_done
+            parent.completed_at = max(completed_stamps) if all_done and completed_stamps else ""
+            parent.paused = any_in_progress and not any_active
+            parent.active_since = ""
+            parent.duration_seconds = sum(max(0, sub.duration_seconds) for sub in sub_steps)
+            self._sync_duration_minutes(parent)
 
     def _active_step_idx(self, *, exclude_idx: int | None = None) -> int | None:
         if not self._process:
@@ -1109,19 +1163,19 @@ class VeriTrakkApp(App):
                         step,
                         sub_done=sub_done,
                         sub_total=sub_total,
-                        live_seconds=self._live_step_seconds(step, now),
+                        live_seconds=self._live_step_seconds(i, now),
                     ),
                     data=i, expand=should_expand,
                 )
                 for k in range(i + 1, j):
                     sub = proc.steps[k]
                     node.add_leaf(
-                        _step_label(sub, live_seconds=self._live_step_seconds(sub, now)),
+                        _step_label(sub, live_seconds=self._live_step_seconds(k, now)),
                         data=k,
                     )
             else:
                 tree.root.add_leaf(
-                    _step_label(step, live_seconds=self._live_step_seconds(step, now)),
+                    _step_label(step, live_seconds=self._live_step_seconds(i, now)),
                     data=i,
                 )
 
@@ -1151,7 +1205,7 @@ class VeriTrakkApp(App):
                         step,
                         sub_done=sub_done,
                         sub_total=sub_total,
-                        live_seconds=self._live_step_seconds(step, now),
+                        live_seconds=self._live_step_seconds(top_idx, now),
                     )
                 )
                 for sub_node in top_node.children:
@@ -1161,14 +1215,14 @@ class VeriTrakkApp(App):
                     sub_node.set_label(
                         _step_label(
                             sub_step,
-                            live_seconds=self._live_step_seconds(sub_step, now),
+                            live_seconds=self._live_step_seconds(sub_node.data, now),
                         )
                     )
             else:
                 top_node.set_label(
                     _step_label(
                         step,
-                        live_seconds=self._live_step_seconds(step, now),
+                        live_seconds=self._live_step_seconds(top_idx, now),
                     )
                 )
 
@@ -1219,7 +1273,9 @@ class VeriTrakkApp(App):
             self._refresh_focus_cursor_state()
             info.update("")
             return
-        step = self._process.steps[node.data]
+        step_idx = node.data
+        step = self._process.steps[step_idx]
+        live_seconds = self._live_step_seconds(step_idx)
         t = Text()
         # Task label
         t.append(step.label + "\n", style=f"bold {_SALMON}")
@@ -1238,9 +1294,9 @@ class VeriTrakkApp(App):
                     except ValueError:
                         pass
                 t.append(f"\u2713 Done{ts}\n", style=_GREEN)
-            if step.duration_minutes > 0:
+            if live_seconds > 0:
                 t.append(
-                    f"Duration {self._format_minutes(step.duration_minutes)}\n",
+                    f"Duration {self._format_seconds(live_seconds)}\n",
                     style=_TEAL,
                 )
         elif step.started:
@@ -1249,11 +1305,16 @@ class VeriTrakkApp(App):
             else:
                 t.append("\u25d4 In Progress\n", style=f"bold {_BLUE}")
             t.append(
-                f"Duration {self._format_seconds(self._live_step_seconds(step))}\n",
+                f"Duration {self._format_seconds(live_seconds)}\n",
                 style=_TEAL,
             )
         else:
             t.append("\u25cb Pending\n", style="dim")
+            if live_seconds > 0:
+                t.append(
+                    f"Duration {self._format_seconds(live_seconds)}\n",
+                    style=_TEAL,
+                )
         # Note
         if step.note:
             t.append("\nNotes\n", style="dim")
@@ -1274,6 +1335,7 @@ class VeriTrakkApp(App):
         tree = self.query_one("#process_tree", Tree)
         tree.remove_class("cursor-started")
         tree.remove_class("cursor-paused")
+        tree.remove_class("cursor-pending")
 
         if self._mode != "run" or not self._process:
             return
@@ -1288,6 +1350,8 @@ class VeriTrakkApp(App):
                 tree.add_class("cursor-paused")
             else:
                 tree.add_class("cursor-started")
+        elif not step.completed:
+            tree.add_class("cursor-pending")
 
     # ── Run-mode bindings ─────────────────────────────────────────────────────
     def action_complete_step(self) -> None:
@@ -1299,6 +1363,10 @@ class VeriTrakkApp(App):
             return
         step_idx = node.data
         step     = self._process.steps[step_idx]
+
+        # Parent steps with children are fully derived from child state.
+        if node.children:
+            return
 
         if self._process.kind == "work_quest" and not self._process.clocked_in:
             return
@@ -1317,6 +1385,7 @@ class VeriTrakkApp(App):
             now_iso = datetime.now().isoformat()
             step.started_at = step.started_at or now_iso
             step.active_since = now_iso
+            self._sync_parent_states_from_children()
             save_process(self._process, self._proc_path)
             self._rebuild_proc_tree()
             self._refresh_run_sidebar()
@@ -1387,22 +1456,7 @@ class VeriTrakkApp(App):
         step.active_since = ""
         step.result       = result
 
-        # Auto-complete parent if all siblings are done
-        if step.level == 2:
-            parent_idx = proc.parent_of(step_idx)
-            if parent_idx is not None:
-                subs = proc.sub_steps_of(parent_idx)
-                if all(s.completed for _, s in subs):
-                    parent = proc.steps[parent_idx]
-                    parent.completed    = True
-                    parent.completed_at = now.isoformat()
-                    if proc.kind == "work_quest":
-                        if not parent.started and parent.started_at:
-                            parent.started = True
-                        if parent.active_since:
-                            self._accumulate_active_minutes(parent_idx, now)
-                        parent.paused = False
-                        parent.active_since = ""
+        self._sync_parent_states_from_children()
 
         # Check if the whole process is done
         if proc.is_fully_complete() and not proc.completed:
@@ -1426,16 +1480,14 @@ class VeriTrakkApp(App):
         step_idx = node.data
         proc     = self._process
         step     = proc.steps[step_idx]
+
+        # Parent steps with children are fully derived from child state.
+        if node.children:
+            return
+
         can_revert_started = proc.kind == "work_quest" and step.started and not step.completed
         if not step.completed and not can_revert_started:
             return
-
-        # Block uncomplete on a completed parent when all its sub-tasks are still done.
-        # The user must undo a child first.
-        if step.level == 1 and step.completed:
-            subs = proc.sub_steps_of(step_idx)
-            if subs and all(s.completed for _, s in subs):
-                return
 
         # Revert to "not even started".
         step.started      = False
@@ -1448,19 +1500,7 @@ class VeriTrakkApp(App):
         step.duration_minutes = 0
         step.duration_seconds = 0
 
-        # Un-complete parent if it was auto-completed
-        if step.level == 2:
-            parent_idx = proc.parent_of(step_idx)
-            if parent_idx is not None:
-                parent = proc.steps[parent_idx]
-                parent.started      = False
-                parent.started_at   = ""
-                parent.paused       = False
-                parent.active_since = ""
-                parent.completed    = False
-                parent.completed_at = ""
-                parent.duration_minutes = 0
-                parent.duration_seconds = 0
+        self._sync_parent_states_from_children()
 
         if proc.completed:
             proc.completed    = False
@@ -1511,6 +1551,7 @@ class VeriTrakkApp(App):
             self._accumulate_active_minutes(step_idx, now)
             step.paused = True
 
+        self._sync_parent_states_from_children()
         save_process(self._process, self._proc_path)
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
