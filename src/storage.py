@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import shutil
 import textwrap
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -382,6 +383,24 @@ def sanitize_filename_for(name: str, kind: str) -> str:
     safe = re.sub(r'[<>:"/\\|?*]+', "_", name).strip()
     ext = ".wrkqst" if kind == "work_quest" else ".prcss"
     return (safe or "new_process") + ext
+
+
+def is_base_process(file_path: Path) -> bool:
+    """Return True if file_path is a base .prcss template (no '#' in stem)."""
+    return file_path.suffix == ".prcss" and "#" not in file_path.stem
+
+
+def create_process_instance(base_path: Path, run_id: str = "") -> Path:
+    """Copy a base .prcss file to a fresh timestamped instance and return the instance path."""
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    safe_id = re.sub(r'[<>:"/\\|?*\[\]#]+', "_", run_id).strip() if run_id else ""
+    if safe_id:
+        instance_name = f"{base_path.stem}[{safe_id}]#{ts}{base_path.suffix}"
+    else:
+        instance_name = f"{base_path.stem}#{ts}{base_path.suffix}"
+    instance_path = base_path.parent / instance_name
+    shutil.copy2(base_path, instance_path)
+    return instance_path
 
 
 # ── Log generation / publishing ───────────────────────────────────────────────

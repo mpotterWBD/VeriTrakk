@@ -26,6 +26,7 @@ from .storage import (
     load_session, save_session,
     sanitize_filename_for,
     generate_log_text, publish_process,
+    is_base_process, create_process_instance,
 )
 
 # Brand colors as hex (Rich doesn't know Textual CSS color names)
@@ -93,17 +94,19 @@ def _progress_bar(pct: float, width: int = 20) -> str:
 def _step_label(
     step: Step,
     *,
+    number_prefix: str = "",
     sub_done: int | None = None,
     sub_total: int | None = None,
     live_seconds: int | None = None,
 ) -> Text:
     """Rich Text label for a step node in the run-mode tree."""
+    display_label = f"{number_prefix} {step.label}" if number_prefix else step.label
     if step.completed:
         if step.result == "PASS":
-            t = Text(f"\u2713  {step.label}", style=f"bold {_GREEN}")
+            t = Text(f"\u2713  {display_label}", style=f"bold {_GREEN}")
             t.append("   PASS", style=f"bold {_GREEN}")
         elif step.result == "FAIL":
-            t = Text(f"\u2717  {step.label}", style="bold red")
+            t = Text(f"\u2717  {display_label}", style="bold red")
             t.append("   FAIL", style="bold red")
         else:
             ts = ""
@@ -113,7 +116,7 @@ def _step_label(
                     ts = f"   {dt.strftime('%I:%M %p').lstrip('0')}"
                 except ValueError:
                     pass
-            t = Text(f"\u2713  {step.label}", style=_GREEN)
+            t = Text(f"\u2713  {display_label}", style=_GREEN)
             if ts:
                 t.append(ts, style=f"dim {_GREEN}")
             if live_seconds is not None and live_seconds > 0:
@@ -126,7 +129,7 @@ def _step_label(
                 m = step.duration_minutes % 60
                 t.append(f"   {h:02d}:{m:02d}", style=f"dim {_TEAL}")
     elif step.started and step.paused:
-        t = Text(f"\u25d4  {step.label}", style=f"bold {_PURPLE}")
+        t = Text(f"\u25d4  {display_label}", style=f"bold {_PURPLE}")
         t.append("   PAUSED", style=f"bold {_PURPLE}")
         if live_seconds is not None and live_seconds > 0:
             h = live_seconds // 3600
@@ -136,7 +139,7 @@ def _step_label(
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     elif step.started:
-        t = Text(f"\u25d4  {step.label}", style=f"bold {_BLUE}")
+        t = Text(f"\u25d4  {display_label}", style=f"bold {_BLUE}")
         if live_seconds is not None and live_seconds > 0:
             h = live_seconds // 3600
             m = (live_seconds % 3600) // 60
@@ -145,7 +148,7 @@ def _step_label(
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     else:
-        t = Text(f"\u25cb  {step.label}")
+        t = Text(f"\u25cb  {display_label}")
         if live_seconds is not None and live_seconds > 0:
             h = live_seconds // 3600
             m = (live_seconds % 3600) // 60
@@ -160,10 +163,11 @@ def _step_label(
     return t
 
 
-def _builder_label(step: Step) -> Text:
+def _builder_label(step: Step, *, number_prefix: str = "") -> Text:
     """Rich Text label for a step node in the builder tree."""
     prefix = "  " * max(0, step.level - 1)
-    t = Text(f"{prefix}{step.label}")
+    label = f"{number_prefix} {step.label}" if number_prefix else step.label
+    t = Text(f"{prefix}{label}")
     extras: list[str] = []
     if step.note:
         extras.append("[N]")
@@ -408,23 +412,112 @@ class ThresholdScreen(ModalScreen):
 
 class StepScreen(ModalScreen):
     """Add or edit a task: label, optional note, optional thresholds."""
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "prev_item", "Previous Item", show=False),
+        Binding("down", "next_item", "Next Item", show=False),
+    ]
 
     def __init__(
         self,
         existing: Step | None = None,
         title: str = "Add Task",
         allow_thresholds: bool = True,
+        multi_mode: bool = False,
+        parent_label: str = "",
     ) -> None:
         super().__init__()
         self._ex    = existing
         self._title = title
         self._allow_thresholds = allow_thresholds
+        self._multi_mode = multi_mode
+        self._parent_label = parent_label
+        self._items: list[dict[str, str]] = []
+        self._idx = 0
+
+    def _input_payload(self) -> dict[str, str]:
+        upper = self.query_one("#step_ut", Input).value.strip() if self._allow_thresholds else ""
+        lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
+        return {
+            "label": self.query_one("#step_label", Input).value.strip(),
+            "note": self.query_one("#step_note", Input).value.strip(),
+            "threshold_upper": upper,
+            "threshold_lower": lower,
+        }
+
+    def _set_inputs_from_payload(self, payload: dict[str, str] | None = None) -> None:
+        payload = payload or {
+            "label": "",
+            "note": "",
+            "threshold_upper": "",
+            "threshold_lower": "",
+        }
+        self.query_one("#step_label", Input).value = payload.get("label", "")
+        self.query_one("#step_note", Input).value = payload.get("note", "")
+        if self._allow_thresholds:
+            self.query_one("#step_ut", Input).value = payload.get("threshold_upper", "")
+            self.query_one("#step_lt", Input).value = payload.get("threshold_lower", "")
+
+    def _is_draft(self) -> bool:
+        return self._idx >= len(self._items)
+
+    def _commit_current(self) -> None:
+        payload = self._input_payload()
+        if not payload["label"]:
+            return
+
+        if self._is_draft():
+            self._items.append(payload)
+            self._idx = len(self._items)
+            return
+
+        self._items[self._idx] = payload
+
+    def _refresh_multi_meta(self) -> None:
+        if not self._multi_mode:
+            return
+
+        meta = self.query_one("#step_meta", Static)
+        preview = self.query_one("#step_existing", Static)
+        delete_btn = self.query_one("#btn_delete", Button)
+
+        if self._is_draft():
+            meta.update(f"Draft Item {len(self._items) + 1} of {len(self._items) + 1}")
+            delete_btn.disabled = True
+        else:
+            meta.update(f"Editing Item {self._idx + 1} of {len(self._items)}")
+            delete_btn.disabled = False
+
+        lines: list[str] = []
+        for i, item in enumerate(self._items, start=1):
+            parts = [f"{i}. {item['label']}"]
+            if item["note"]:
+                parts.append("[N]")
+            if item["threshold_upper"] or item["threshold_lower"]:
+                parts.append("[T]")
+            lines.append("  ".join(parts))
+        preview.update("\n".join(lines) if lines else "No saved items yet.")
+
+    def _load_current_into_inputs(self) -> None:
+        if not self._multi_mode:
+            return
+        if self._is_draft():
+            self._set_inputs_from_payload(None)
+        else:
+            self._set_inputs_from_payload(self._items[self._idx])
+        self._refresh_multi_meta()
 
     def compose(self) -> ComposeResult:
         ex = self._ex
         with Vertical(id="modal_box"):
             yield Static(self._title, id="modal_title")
+            if self._parent_label:
+                yield Label("Adding under")
+                yield Static(self._parent_label, id="step_parent")
+            if self._multi_mode:
+                yield Label("Added Items")
+                yield Static("", id="step_existing")
+                yield Static("", id="step_meta")
             yield Label("Label")
             yield Input(
                 value=ex.label if ex else "",
@@ -446,9 +539,46 @@ class StepScreen(ModalScreen):
                     value=ex.threshold_lower if ex else "",
                     placeholder="e.g. 4.7", id="step_lt",
                 )
+            if self._multi_mode:
+                with Horizontal(id="note_nav_btns"):
+                    yield Button("Up",      variant="default", id="btn_prev")
+                    yield Button("Down",    variant="success", id="btn_next")
+                    yield Button("Delete",  variant="error",   id="btn_delete")
             with Horizontal(id="modal_btns"):
                 yield Button("Save",   variant="primary", id="btn_save")
                 yield Button("Cancel",                   id="btn_cancel")
+
+    def on_mount(self) -> None:
+        if self._multi_mode:
+            self._load_current_into_inputs()
+
+    def action_prev_item(self) -> None:
+        if not self._multi_mode:
+            return
+        self._commit_current()
+        if self._is_draft() and self._items:
+            self._idx = len(self._items) - 1
+        elif self._idx > 0:
+            self._idx -= 1
+        self._load_current_into_inputs()
+
+    def action_next_item(self) -> None:
+        if not self._multi_mode:
+            return
+        self._commit_current()
+        if self._idx < len(self._items):
+            self._idx += 1
+        self._load_current_into_inputs()
+
+    def on_key(self, event) -> None:
+        if not self._multi_mode:
+            return
+        if event.key == "up":
+            self.action_prev_item()
+            event.stop()
+        elif event.key == "down":
+            self.action_next_item()
+            event.stop()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -456,6 +586,16 @@ class StepScreen(ModalScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_cancel":
             self.dismiss(None)
+        elif event.button.id == "btn_prev":
+            self.action_prev_item()
+        elif event.button.id == "btn_next":
+            self.action_next_item()
+        elif event.button.id == "btn_delete":
+            if self._multi_mode and not self._is_draft():
+                del self._items[self._idx]
+                if self._idx > len(self._items):
+                    self._idx = len(self._items)
+                self._load_current_into_inputs()
         elif event.button.id == "btn_save":
             self._submit()
 
@@ -463,6 +603,14 @@ class StepScreen(ModalScreen):
         self._submit()
 
     def _submit(self) -> None:
+        if self._multi_mode:
+            self._commit_current()
+            items = [item for item in self._items if item["label"]]
+            if not items:
+                return
+            self.dismiss(items)
+            return
+
         label = self.query_one("#step_label", Input).value.strip()
         if not label:
             return
@@ -573,6 +721,37 @@ class FilePickerScreen(ModalScreen):
         self.dismiss(self._cur_dir / name)
 
 
+class RunIDScreen(ModalScreen):
+    """Prompt for a unique run identifier before spawning a process instance."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, process_name: str) -> None:
+        super().__init__()
+        self._process_name = process_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Static("Start New Run", id="modal_title")
+            yield Static(self._process_name, id="thresh_step_label")
+            yield Label("Unique Run Identifier  (optional)")
+            yield Input(placeholder="e.g. Unit-42, Line-B, John...", id="run_id_inp")
+            with Horizontal(id="modal_btns"):
+                yield Button("Start",  variant="primary",  id="btn_start")
+                yield Button("Cancel", variant="default",  id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_start":
+            self.dismiss(self.query_one("#run_id_inp", Input).value.strip())
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.dismiss(self.query_one("#run_id_inp", Input).value.strip())
+
+
 class NewFileTypeScreen(ModalScreen):
     """Choose whether a new file is a process or work quest."""
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -619,11 +798,13 @@ class VeriTrakkApp(App):
         Binding("p",     "pause_step",      "Pause",     show=True),
         Binding("c",     "toggle_clock",    "Clock In/Out", show=True),
         # Build-mode actions
-        Binding("a",      "add_step",     "Add Task", show=False),
-        Binding("s",      "add_sub_step", "Add Sub Task",  show=False),
-        Binding("e",      "edit_step",    "Edit",     show=False),
-        Binding("d",      "delete_step",  "Delete",   show=False),
-        Binding("ctrl+s", "save_build",   "Save",     show=False),
+        Binding("a",      "add_step",      "Add Task",    show=False),
+        Binding("s",      "add_sub_step",  "Add Sub Task", show=False),
+        Binding("e",      "edit_step",     "Edit",        show=False),
+        Binding("d",      "delete_step",   "Delete",      show=False),
+        Binding("ctrl+up",   "shift_step_up",   "Shift Up",   show=False),
+        Binding("ctrl+down", "shift_step_down", "Shift Down", show=False),
+        Binding("ctrl+s", "save_build",    "Save",        show=False),
         # Global
         Binding("escape", "go_back", "Back", show=True),
         Binding("q",      "quit",    "Quit", show=True),
@@ -692,11 +873,13 @@ class VeriTrakkApp(App):
                 with Vertical(id="view_build"):
                     with Horizontal(id="build_toolbar"):
                         yield Input(placeholder="Process name...", id="build_name_inp")
-                        yield Button("+ Task",  id="btn_add_step",  variant="success", classes="build_btn")
-                        yield Button("+ Sub Task",   id="btn_add_sub",   variant="success", classes="build_btn")
-                        yield Button("Edit",    id="btn_edit_step", variant="default", classes="build_btn")
-                        yield Button("Delete",  id="btn_del_step",  variant="error",   classes="build_btn")
-                        yield Button("Save",    id="btn_save_proc", variant="primary", classes="build_btn")
+                        yield Button("+ Task",    id="btn_add_step",    variant="success", classes="build_btn")
+                        yield Button("+ Sub Task", id="btn_add_sub",     variant="success", classes="build_btn")
+                        yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
+                        yield Button("Delete",     id="btn_del_step",    variant="error",   classes="build_btn")
+                        yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
+                        yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
+                        yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
                     yield Tree("New Process", id="builder_tree")
 
                 # logs viewer
@@ -808,13 +991,42 @@ class VeriTrakkApp(App):
 
     def _build_terms(self) -> tuple[str, str]:
         if self._build_proc and self._build_proc.kind == "process":
-            return ("Process", "Sub Process")
+            return ("Step", "Sub Step")
         return ("Task", "Sub Task")
+
+    def _step_number(self, proc: Process, step_idx: int) -> str:
+        """Return hierarchical step numbering (e.g., 1, 2.1, 2.1.1)."""
+        if step_idx < 0 or step_idx >= len(proc.steps):
+            return ""
+
+        parts: list[str] = []
+        current_idx = step_idx
+
+        while True:
+            parent_idx = proc.parent_of(current_idx)
+            if parent_idx is None:
+                top_count = sum(1 for s in proc.steps[: current_idx + 1] if s.level == 1)
+                parts.append(str(top_count))
+                break
+
+            siblings = proc.children_of(parent_idx)
+            ordinal = 1
+            for pos, (sib_idx, _) in enumerate(siblings, start=1):
+                if sib_idx == current_idx:
+                    ordinal = pos
+                    break
+            parts.append(str(ordinal))
+            current_idx = parent_idx
+
+        return ".".join(reversed(parts))
 
     def _refresh_build_terminology(self) -> None:
         item_term, sub_item_term = self._build_terms()
         self.query_one("#btn_add_step", Button).label = f"+ {item_term}"
         self.query_one("#btn_add_sub", Button).label = f"+ {sub_item_term}"
+        is_process = self._build_proc is not None and self._build_proc.kind == "process"
+        self.query_one("#btn_shift_up", Button).display = is_process
+        self.query_one("#btn_shift_down", Button).display = is_process
 
     # ── Button handling ───────────────────────────────────────────────────────
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -841,6 +1053,10 @@ class VeriTrakkApp(App):
             self.action_edit_step(); return
         if bid == "btn_del_step":
             self.action_delete_step(); return
+        if bid == "btn_shift_up":
+            self.action_shift_step_up(); return
+        if bid == "btn_shift_down":
+            self.action_shift_step_down(); return
         if bid == "btn_save_proc":
             self.action_save_build(); return
 
@@ -874,9 +1090,34 @@ class VeriTrakkApp(App):
         self._load_process(path)
 
     def _load_process(self, file_path: Path) -> None:
+        # Base .prcss files are reusable templates — prompt for run ID then spawn a fresh instance.
+        if is_base_process(file_path):
+            self.push_screen(
+                RunIDScreen(file_path.stem),
+                callback=lambda run_id: self._spawn_instance(file_path, run_id),
+            )
+            return
+        self._open_process_file(file_path)
+
+    def _spawn_instance(self, base_path: Path, run_id: str | None) -> None:
+        if run_id is None:
+            return  # user cancelled
+        try:
+            instance_path = create_process_instance(base_path, run_id)
+        except OSError:
+            self.notify("Could not create process instance.", severity="error")
+            return
+        self.notify(
+            f"New run: {instance_path.name}",
+            title="Process Instance Created",
+            severity="information",
+        )
+        self._open_process_file(instance_path)
+
+    def _open_process_file(self, file_path: Path) -> None:
         try:
             proc = load_process(file_path)
-        except OSError as exc:
+        except OSError:
             return
         if not proc.kind:
             proc.kind = "work_quest" if file_path.suffix == ".wrkqst" else "process"
@@ -1152,6 +1393,7 @@ class VeriTrakkApp(App):
             while stack and stack[-1][0] >= step.level:
                 stack.pop()
             parent_node = stack[-1][1] if stack else tree.root
+            number_prefix = self._step_number(proc, idx) if proc.kind == "process" else ""
 
             children = proc.children_of(idx)
             sub_done = sum(1 for _, child in children if child.completed)
@@ -1161,6 +1403,7 @@ class VeriTrakkApp(App):
                 node = parent_node.add(
                     _step_label(
                         step,
+                        number_prefix=number_prefix,
                         sub_done=sub_done,
                         sub_total=sub_total,
                         live_seconds=self._live_step_seconds(idx, now),
@@ -1171,7 +1414,11 @@ class VeriTrakkApp(App):
                 stack.append((step.level, node))
             else:
                 parent_node.add_leaf(
-                    _step_label(step, live_seconds=self._live_step_seconds(idx, now)),
+                    _step_label(
+                        step,
+                        number_prefix=number_prefix,
+                        live_seconds=self._live_step_seconds(idx, now),
+                    ),
                     data=idx,
                 )
 
@@ -1188,12 +1435,14 @@ class VeriTrakkApp(App):
             if node.data is not None:
                 idx = node.data
                 step = proc.steps[idx]
+                number_prefix = self._step_number(proc, idx) if proc.kind == "process" else ""
                 children = proc.children_of(idx)
                 sub_done = sum(1 for _, child in children if child.completed)
                 sub_total = len(children)
                 node.set_label(
                     _step_label(
                         step,
+                        number_prefix=number_prefix,
                         sub_done=sub_done if children else None,
                         sub_total=sub_total if children else None,
                         live_seconds=self._live_step_seconds(idx, now),
@@ -1209,15 +1458,34 @@ class VeriTrakkApp(App):
             return
         proc = self._process
         pct  = proc.progress_pct
+        item_word = "steps" if proc.kind == "process" else "tasks"
+        kind_label = "Process" if proc.kind == "process" else "Work Quest"
 
-        name_t = Text(proc.name, style=f"bold {_SALMON}")
+        file_name = self._proc_path.name if self._proc_path else "(unsaved)"
+        unique_id = self._extract_instance_unique_id(self._proc_path)
+
+        name_t = Text()
+        name_t.append(f'{kind_label}: ', style=f"bold {_KHAKI}")
+        name_t.append(f'"{proc.name}"\n', style=f"bold {_SALMON}")
+        name_t.append("File: ", style=f"bold {_KHAKI}")
+        name_t.append(f"{file_name}", style=f"{_BLUE}")
+        if proc.kind == "process":
+            name_t.append("\nUnique ID: ", style=f"bold {_KHAKI}")
+            name_t.append(f"{unique_id or 'None'}", style=f"{_BLUE}")
         self.query_one("#run_name", Static).update(name_t)
 
         prog_t = Text()
         prog_t.append(f"{_progress_bar(pct)}\n", style=_GREEN)
-        prog_t.append(f"{proc.done_top}/{proc.total_top} tasks  ", style=_KHAKI)
+        prog_t.append(f"{proc.done_top}/{proc.total_top} {item_word}  ", style=_KHAKI)
         prog_t.append(f"{pct:.0f}%", style=_GOLD)
         self.query_one("#run_progress", Static).update(prog_t)
+
+    def _extract_instance_unique_id(self, proc_path: Path | None) -> str:
+        if proc_path is None:
+            return ""
+        stem = proc_path.stem.replace("#COMPLETE", "")
+        match = re.match(r"^.+?\[(?P<uid>[^\]]+)\]#.+$", stem)
+        return match.group("uid").strip() if match else ""
 
     def _refresh_status(self) -> None:
         bar = self.query_one("#status_bar", Static)
@@ -1253,10 +1521,12 @@ class VeriTrakkApp(App):
             return
         step_idx = node.data
         step = self._process.steps[step_idx]
+        number_prefix = self._step_number(self._process, step_idx) if self._process.kind == "process" else ""
+        display_label = f"{number_prefix} {step.label}" if number_prefix else step.label
         live_seconds = self._live_step_seconds(step_idx)
         t = Text()
         # Task label
-        t.append(step.label + "\n", style=f"bold {_SALMON}")
+        t.append(display_label + "\n", style=f"bold {_SALMON}")
         # Status
         if step.completed:
             if step.result == "PASS":
@@ -1579,17 +1849,41 @@ class VeriTrakkApp(App):
             while stack and stack[-1][0] >= step.level:
                 stack.pop()
             parent_node = stack[-1][1] if stack else tree.root
+            number_prefix = self._step_number(proc, idx) if proc.kind == "process" else ""
             if proc.has_children(idx):
-                node = parent_node.add(_builder_label(step), data=idx, expand=True)
+                node = parent_node.add(
+                    _builder_label(step, number_prefix=number_prefix),
+                    data=idx,
+                    expand=True,
+                )
                 stack.append((step.level, node))
             else:
-                parent_node.add_leaf(_builder_label(step), data=idx)
+                parent_node.add_leaf(_builder_label(step, number_prefix=number_prefix), data=idx)
 
         tree.root.expand()
 
     def _focused_build_idx(self) -> int | None:
         node = self.query_one("#builder_tree", Tree).cursor_node
         return None if (node is None or node.data is None) else node.data
+
+    def _move_builder_cursor_to(self, target_idx: int) -> None:
+        """Schedule a cursor move to the node with data==target_idx after the tree redraws."""
+        self.call_after_refresh(self._do_move_builder_cursor, target_idx)
+
+    def _do_move_builder_cursor(self, target_idx: int) -> None:
+        tree = self.query_one("#builder_tree", Tree)
+
+        def _find(node) -> bool:
+            if node.data == target_idx:
+                tree.move_cursor(node)
+                return True
+            for child in node.children:
+                if _find(child):
+                    return True
+            return False
+
+        _find(tree.root)
+        tree.focus()
 
     def action_add_step(self) -> None:
         if self._mode != "build":
@@ -1599,13 +1893,15 @@ class VeriTrakkApp(App):
             StepScreen(
                 title=f"Add Top-Level {item_term}",
                 allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
+                multi_mode=True,
             ),
             callback=self._on_add_step,
         )
 
-    def _on_add_step(self, data: dict | None) -> None:
+    def _on_add_step(self, data: dict | list[dict] | None) -> None:
         if data is None or not self._build_proc:
             return
+        items = data if isinstance(data, list) else [data]
         cur_idx = self._focused_build_idx()
         if cur_idx is not None:
             top_idx = cur_idx
@@ -1617,12 +1913,13 @@ class VeriTrakkApp(App):
             insert_at = self._build_proc.last_descendant_idx(top_idx) + 1
         else:
             insert_at = len(self._build_proc.steps)
-        self._build_proc.steps.insert(insert_at, Step(
-            label=data["label"], level=1,
-            note=data["note"],
-            threshold_upper=data["threshold_upper"],
-            threshold_lower=data["threshold_lower"],
-        ))
+        for offset, item in enumerate(items):
+            self._build_proc.steps.insert(insert_at + offset, Step(
+                label=item["label"], level=1,
+                note=item["note"],
+                threshold_upper=item["threshold_upper"],
+                threshold_lower=item["threshold_lower"],
+            ))
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
 
@@ -1630,29 +1927,39 @@ class VeriTrakkApp(App):
         if self._mode != "build":
             return
         _, sub_item_term = self._build_terms()
+        cur_idx = self._focused_build_idx()
+        parent_label = ""
+        if cur_idx is not None and self._build_proc is not None:
+            parent = self._build_proc.steps[cur_idx]
+            number_prefix = self._step_number(self._build_proc, cur_idx) if self._build_proc.kind == "process" else ""
+            parent_label = f"{number_prefix} {parent.label}" if number_prefix else parent.label
         self.push_screen(
             StepScreen(
                 title=f"Add {sub_item_term}",
                 allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
+                multi_mode=True,
+                parent_label=parent_label,
             ),
             callback=self._on_add_sub,
         )
 
-    def _on_add_sub(self, data: dict | None) -> None:
+    def _on_add_sub(self, data: dict | list[dict] | None) -> None:
         if data is None or not self._build_proc:
             return
+        items = data if isinstance(data, list) else [data]
         cur_idx = self._focused_build_idx()
         if cur_idx is None:
             return
         proc = self._build_proc
         step = proc.steps[cur_idx]
         insert_at = proc.last_descendant_idx(cur_idx) + 1
-        proc.steps.insert(insert_at, Step(
-            label=data["label"], level=step.level + 1,
-            note=data["note"],
-            threshold_upper=data["threshold_upper"],
-            threshold_lower=data["threshold_lower"],
-        ))
+        for offset, item in enumerate(items):
+            proc.steps.insert(insert_at + offset, Step(
+                label=item["label"], level=step.level + 1,
+                note=item["note"],
+                threshold_upper=item["threshold_upper"],
+                threshold_lower=item["threshold_lower"],
+            ))
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
 
@@ -1695,6 +2002,59 @@ class VeriTrakkApp(App):
         del proc.steps[cur_idx:end]
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
+
+    def action_shift_step_up(self) -> None:
+        if self._mode != "build" or not self._build_proc:
+            return
+        if self._build_proc.kind != "process":
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is None:
+            return
+        proc = self._build_proc
+        cur_level = proc.steps[cur_idx].level
+
+        # Walk backwards past deeper steps to find the previous sibling.
+        prev_sib_idx = cur_idx - 1
+        while prev_sib_idx >= 0 and proc.steps[prev_sib_idx].level > cur_level:
+            prev_sib_idx -= 1
+
+        if prev_sib_idx < 0 or proc.steps[prev_sib_idx].level != cur_level:
+            return  # no previous sibling at the same level
+
+        cur_end = proc.subtree_end_exclusive(cur_idx)
+        cur_subtree  = proc.steps[cur_idx:cur_end]
+        prev_subtree = proc.steps[prev_sib_idx:cur_idx]
+        proc.steps[prev_sib_idx:cur_end] = cur_subtree + prev_subtree
+        new_idx = prev_sib_idx
+        self._rebuild_builder_tree()
+        self._move_builder_cursor_to(new_idx)
+
+    def action_shift_step_down(self) -> None:
+        if self._mode != "build" or not self._build_proc:
+            return
+        if self._build_proc.kind != "process":
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is None:
+            return
+        proc = self._build_proc
+        cur_level = proc.steps[cur_idx].level
+
+        cur_end = proc.subtree_end_exclusive(cur_idx)
+        if cur_end >= len(proc.steps):
+            return  # nothing below
+        if proc.steps[cur_end].level != cur_level:
+            return  # next step is not at the same level (not a sibling)
+
+        next_sib_idx = cur_end
+        next_end = proc.subtree_end_exclusive(next_sib_idx)
+        cur_subtree  = proc.steps[cur_idx:cur_end]
+        next_subtree = proc.steps[next_sib_idx:next_end]
+        new_idx = cur_idx + len(next_subtree)
+        proc.steps[cur_idx:next_end] = next_subtree + cur_subtree
+        self._rebuild_builder_tree()
+        self._move_builder_cursor_to(new_idx)
 
     def action_save_build(self) -> None:
         if self._mode != "build" or not self._build_proc:
@@ -1793,6 +2153,13 @@ class VeriTrakkApp(App):
             return self._mode == "run"
         if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
             return self._mode == "build" and not isinstance(self.focused, Input)
+        if action in ("shift_step_up", "shift_step_down"):
+            return (
+                self._mode == "build"
+                and not isinstance(self.focused, Input)
+                and self._build_proc is not None
+                and self._build_proc.kind == "process"
+            )
         if action == "save_build":
             return self._mode == "build"
         return True
