@@ -162,7 +162,7 @@ def _step_label(
 
 def _builder_label(step: Step) -> Text:
     """Rich Text label for a step node in the builder tree."""
-    prefix = "  " if step.level == 2 else ""
+    prefix = "  " * max(0, step.level - 1)
     t = Text(f"{prefix}{step.label}")
     extras: list[str] = []
     if step.note:
@@ -968,11 +968,10 @@ class VeriTrakkApp(App):
 
         step = self._process.steps[step_idx]
 
-        # For top-level parent steps, show rolled-up sub-step time live.
-        if step.level == 1:
-            subs = self._process.sub_steps_of(step_idx)
-            if subs:
-                return max(0, sum(self._live_step_seconds(sub_idx, now) for sub_idx, _ in subs))
+        # Parent nodes show rolled-up live duration from their immediate children.
+        children = self._process.children_of(step_idx)
+        if children:
+            return max(0, sum(self._live_step_seconds(child_idx, now) for child_idx, _ in children))
 
         total = max(0, step.duration_seconds)
         if (
@@ -994,18 +993,19 @@ class VeriTrakkApp(App):
         if not self._process:
             return
         proc = self._process
-        for idx, parent in proc.top_steps:
-            subs = proc.sub_steps_of(idx)
-            if not subs:
+        for idx in range(len(proc.steps) - 1, -1, -1):
+            parent = proc.steps[idx]
+            children = proc.children_of(idx)
+            if not children:
                 continue
 
-            sub_steps = [sub for _, sub in subs]
-            started_stamps = [sub.started_at for sub in sub_steps if sub.started_at]
-            completed_stamps = [sub.completed_at for sub in sub_steps if sub.completed_at]
+            child_steps = [child for _, child in children]
+            started_stamps = [child.started_at for child in child_steps if child.started_at]
+            completed_stamps = [child.completed_at for child in child_steps if child.completed_at]
 
-            any_in_progress = any(sub.started and not sub.completed for sub in sub_steps)
-            any_active = any(sub.started and not sub.completed and not sub.paused for sub in sub_steps)
-            all_done = all(sub.completed for sub in sub_steps)
+            any_in_progress = any(child.started and not child.completed for child in child_steps)
+            any_active = any(child.started and not child.completed and not child.paused for child in child_steps)
+            all_done = all(child.completed for child in child_steps)
 
             # Parent run-state is derived from children currently in progress.
             parent.started = any_in_progress
@@ -1014,7 +1014,7 @@ class VeriTrakkApp(App):
             parent.completed_at = max(completed_stamps) if all_done and completed_stamps else ""
             parent.paused = any_in_progress and not any_active
             parent.active_since = ""
-            parent.duration_seconds = sum(max(0, sub.duration_seconds) for sub in sub_steps)
+            parent.duration_seconds = sum(max(0, child.duration_seconds) for child in child_steps)
             self._sync_duration_minutes(parent)
 
     def _active_step_idx(self, *, exclude_idx: int | None = None) -> int | None:
@@ -1024,7 +1024,7 @@ class VeriTrakkApp(App):
             if exclude_idx is not None and idx == exclude_idx:
                 continue
             # Parent steps with children are derived state and should never block starts.
-            if step.level == 1 and self._process.sub_steps_of(idx):
+            if self._process.has_children(idx):
                 continue
             if step.started and not step.completed and not step.paused:
                 return idx
@@ -1128,12 +1128,15 @@ class VeriTrakkApp(App):
         proc = self._process
         tree = self.query_one("#process_tree", Tree)
 
-        # Remember which top-level step indices are currently collapsed
-        # so we can restore the user's expand/collapse state after the rebuild.
+        # Remember collapsed nodes so we can restore expand/collapse state.
         collapsed: set[int] = set()
-        for node in tree.root.children:
-            if node.data is not None and not node.is_expanded:
+        def _collect_collapsed(node) -> None:
+            if node.data is not None and node.children and not node.is_expanded:
                 collapsed.add(node.data)
+            for child in node.children:
+                _collect_collapsed(child)
+
+        _collect_collapsed(tree.root)
 
         root_label = Text(proc.name)
         if proc.completed:
@@ -1143,46 +1146,34 @@ class VeriTrakkApp(App):
         tree.reset(root_label)
         tree.root.data = None
 
-        i = 0
         now = datetime.now()
-        while i < len(proc.steps):
-            step = proc.steps[i]
-            if step.level != 1:
-                i += 1
-                continue
+        stack: list[tuple[int, object]] = [(0, tree.root)]
+        for idx, step in enumerate(proc.steps):
+            while stack and stack[-1][0] >= step.level:
+                stack.pop()
+            parent_node = stack[-1][1] if stack else tree.root
 
-            # Find span of sub-steps
-            j = i + 1
-            while j < len(proc.steps) and proc.steps[j].level == 2:
-                j += 1
+            children = proc.children_of(idx)
+            sub_done = sum(1 for _, child in children if child.completed)
+            sub_total = len(children)
 
-            if j > i + 1:  # has sub-steps
-                sub_steps = proc.steps[i + 1:j]
-                sub_done  = sum(1 for s in sub_steps if s.completed)
-                sub_total = j - i - 1
-                should_expand = i not in collapsed
-                node = tree.root.add(
+            if children:
+                node = parent_node.add(
                     _step_label(
                         step,
                         sub_done=sub_done,
                         sub_total=sub_total,
-                        live_seconds=self._live_step_seconds(i, now),
+                        live_seconds=self._live_step_seconds(idx, now),
                     ),
-                    data=i, expand=should_expand,
+                    data=idx,
+                    expand=idx not in collapsed,
                 )
-                for k in range(i + 1, j):
-                    sub = proc.steps[k]
-                    node.add_leaf(
-                        _step_label(sub, live_seconds=self._live_step_seconds(k, now)),
-                        data=k,
-                    )
+                stack.append((step.level, node))
             else:
-                tree.root.add_leaf(
-                    _step_label(step, live_seconds=self._live_step_seconds(i, now)),
-                    data=i,
+                parent_node.add_leaf(
+                    _step_label(step, live_seconds=self._live_step_seconds(idx, now)),
+                    data=idx,
                 )
-
-            i = j
 
         tree.root.expand()
 
@@ -1193,41 +1184,25 @@ class VeriTrakkApp(App):
         proc = self._process
         now = datetime.now()
 
-        for top_node in tree.root.children:
-            if top_node.data is None:
-                continue
-            top_idx = top_node.data
-            step = proc.steps[top_idx]
+        def _walk(node) -> None:
+            if node.data is not None:
+                idx = node.data
+                step = proc.steps[idx]
+                children = proc.children_of(idx)
+                sub_done = sum(1 for _, child in children if child.completed)
+                sub_total = len(children)
+                node.set_label(
+                    _step_label(
+                        step,
+                        sub_done=sub_done if children else None,
+                        sub_total=sub_total if children else None,
+                        live_seconds=self._live_step_seconds(idx, now),
+                    )
+                )
+            for child in node.children:
+                _walk(child)
 
-            if top_node.children:
-                subs = proc.sub_steps_of(top_idx)
-                sub_done = sum(1 for _, sub in subs if sub.completed)
-                sub_total = len(subs)
-                top_node.set_label(
-                    _step_label(
-                        step,
-                        sub_done=sub_done,
-                        sub_total=sub_total,
-                        live_seconds=self._live_step_seconds(top_idx, now),
-                    )
-                )
-                for sub_node in top_node.children:
-                    if sub_node.data is None:
-                        continue
-                    sub_step = proc.steps[sub_node.data]
-                    sub_node.set_label(
-                        _step_label(
-                            sub_step,
-                            live_seconds=self._live_step_seconds(sub_node.data, now),
-                        )
-                    )
-            else:
-                top_node.set_label(
-                    _step_label(
-                        step,
-                        live_seconds=self._live_step_seconds(top_idx, now),
-                    )
-                )
+        _walk(tree.root)
 
     def _refresh_run_sidebar(self) -> None:
         if not self._process:
@@ -1368,7 +1343,7 @@ class VeriTrakkApp(App):
         step     = self._process.steps[step_idx]
 
         # Parent steps with children are fully derived from child state.
-        if node.children:
+        if self._process.has_children(step_idx):
             return
 
         if self._process.kind == "work_quest" and not self._process.clocked_in:
@@ -1395,12 +1370,6 @@ class VeriTrakkApp(App):
             self._refresh_status()
             self._update_step_info()
             return
-
-        # Parent node complete gate: only complete when all sub-steps are done.
-        if node.children:
-            subs = self._process.sub_steps_of(step_idx)
-            if not subs or any(not s.completed for _, s in subs):
-                return
 
         if step.has_threshold():
             self._pending_thresh_idx = step_idx
@@ -1485,7 +1454,7 @@ class VeriTrakkApp(App):
         step     = proc.steps[step_idx]
 
         # Parent steps with children are fully derived from child state.
-        if node.children:
+        if proc.has_children(step_idx):
             return
 
         can_revert_started = proc.kind == "work_quest" and step.started and not step.completed
@@ -1605,22 +1574,16 @@ class VeriTrakkApp(App):
         tree.reset(Text(proc.name, style=f"bold {_SALMON}"))
         tree.root.data = None
 
-        i = 0
-        while i < len(proc.steps):
-            step = proc.steps[i]
-            if step.level != 1:
-                i += 1
-                continue
-            j = i + 1
-            while j < len(proc.steps) and proc.steps[j].level == 2:
-                j += 1
-            if j > i + 1:
-                node = tree.root.add(_builder_label(step), data=i, expand=True)
-                for k in range(i + 1, j):
-                    node.add_leaf(_builder_label(proc.steps[k]), data=k)
+        stack: list[tuple[int, object]] = [(0, tree.root)]
+        for idx, step in enumerate(proc.steps):
+            while stack and stack[-1][0] >= step.level:
+                stack.pop()
+            parent_node = stack[-1][1] if stack else tree.root
+            if proc.has_children(idx):
+                node = parent_node.add(_builder_label(step), data=idx, expand=True)
+                stack.append((step.level, node))
             else:
-                tree.root.add_leaf(_builder_label(step), data=i)
-            i = j
+                parent_node.add_leaf(_builder_label(step), data=idx)
 
         tree.root.expand()
 
@@ -1645,10 +1608,13 @@ class VeriTrakkApp(App):
             return
         cur_idx = self._focused_build_idx()
         if cur_idx is not None:
-            insert_at = cur_idx + 1
-            while (insert_at < len(self._build_proc.steps)
-                   and self._build_proc.steps[insert_at].level == 2):
-                insert_at += 1
+            top_idx = cur_idx
+            while top_idx > 0 and self._build_proc.steps[top_idx].level > 1:
+                parent_idx = self._build_proc.parent_of(top_idx)
+                if parent_idx is None:
+                    break
+                top_idx = parent_idx
+            insert_at = self._build_proc.last_descendant_idx(top_idx) + 1
         else:
             insert_at = len(self._build_proc.steps)
         self._build_proc.steps.insert(insert_at, Step(
@@ -1680,14 +1646,9 @@ class VeriTrakkApp(App):
             return
         proc = self._build_proc
         step = proc.steps[cur_idx]
-        if step.level == 2:
-            insert_at = cur_idx + 1
-        else:
-            insert_at = cur_idx + 1
-            while insert_at < len(proc.steps) and proc.steps[insert_at].level == 2:
-                insert_at += 1
+        insert_at = proc.last_descendant_idx(cur_idx) + 1
         proc.steps.insert(insert_at, Step(
-            label=data["label"], level=2,
+            label=data["label"], level=step.level + 1,
             note=data["note"],
             threshold_upper=data["threshold_upper"],
             threshold_lower=data["threshold_lower"],
@@ -1703,7 +1664,7 @@ class VeriTrakkApp(App):
             return
         step = self._build_proc.steps[cur_idx]
         item_term, sub_item_term = self._build_terms()
-        edit_term = sub_item_term if step.level == 2 else item_term
+        edit_term = sub_item_term if step.level > 1 else item_term
         self.push_screen(
             StepScreen(
                 existing=step,
@@ -1730,14 +1691,8 @@ class VeriTrakkApp(App):
         if cur_idx is None:
             return
         proc = self._build_proc
-        step = proc.steps[cur_idx]
-        if step.level == 1:
-            end = cur_idx + 1
-            while end < len(proc.steps) and proc.steps[end].level == 2:
-                end += 1
-            del proc.steps[cur_idx:end]
-        else:
-            del proc.steps[cur_idx]
+        end = proc.last_descendant_idx(cur_idx) + 1
+        del proc.steps[cur_idx:end]
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
 

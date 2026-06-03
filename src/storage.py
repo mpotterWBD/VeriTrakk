@@ -35,7 +35,7 @@ PDF_SUBTASK_NOTE_TEXT_COLOR = _rgb255(160, 40, 190)
 @dataclass
 class Step:
     label: str
-    level: int                # 1 = top-level step, 2 = sub-step
+    level: int                # 1 = top-level step, 2+ = nested child depth
     started: bool = False
     started_at: str = ""      # ISO-8601 string
     paused: bool = False
@@ -86,20 +86,67 @@ class Process:
         return bool(tops) and all(s.completed for s in tops)
 
     def sub_steps_of(self, top_idx: int) -> list[tuple[int, Step]]:
-        """Return (global_index, step) for sub-steps belonging to top_idx."""
-        result: list[tuple[int, Step]] = []
-        for i in range(top_idx + 1, len(self.steps)):
-            if self.steps[i].level == 1:
-                break
-            result.append((i, self.steps[i]))
-        return result
+        """Backward-compatible alias for descendants of a top-level step."""
+        return self.descendants_of(top_idx)
 
     def parent_of(self, sub_idx: int) -> int | None:
-        """Return the global index of the parent top-level step for a sub-step."""
+        """Return the global index of the nearest parent for a child step."""
+        if sub_idx <= 0 or sub_idx >= len(self.steps):
+            return None
+        level = self.steps[sub_idx].level
         for i in range(sub_idx - 1, -1, -1):
-            if self.steps[i].level == 1:
+            if self.steps[i].level < level:
                 return i
         return None
+
+    def subtree_end_exclusive(self, idx: int) -> int:
+        """Index after this step and all descendants in pre-order list form."""
+        if idx < 0 or idx >= len(self.steps):
+            return idx
+        level = self.steps[idx].level
+        j = idx + 1
+        while j < len(self.steps) and self.steps[j].level > level:
+            j += 1
+        return j
+
+    def descendants_of(self, parent_idx: int) -> list[tuple[int, Step]]:
+        """Return all descendants of a step (any depth)."""
+        if parent_idx < 0 or parent_idx >= len(self.steps):
+            return []
+        parent_level = self.steps[parent_idx].level
+        result: list[tuple[int, Step]] = []
+        j = parent_idx + 1
+        while j < len(self.steps) and self.steps[j].level > parent_level:
+            result.append((j, self.steps[j]))
+            j += 1
+        return result
+
+    def children_of(self, parent_idx: int) -> list[tuple[int, Step]]:
+        """Return immediate children of a step (exactly one level deeper)."""
+        if parent_idx < 0 or parent_idx >= len(self.steps):
+            return []
+        parent_level = self.steps[parent_idx].level
+        child_level = parent_level + 1
+        result: list[tuple[int, Step]] = []
+        j = parent_idx + 1
+        while j < len(self.steps) and self.steps[j].level > parent_level:
+            step = self.steps[j]
+            if step.level == child_level:
+                result.append((j, step))
+                j = self.subtree_end_exclusive(j)
+                continue
+            j += 1
+        return result
+
+    def has_children(self, idx: int) -> bool:
+        if idx < 0 or idx >= len(self.steps):
+            return False
+        nxt = idx + 1
+        return nxt < len(self.steps) and self.steps[nxt].level > self.steps[idx].level
+
+    def last_descendant_idx(self, idx: int) -> int:
+        end = self.subtree_end_exclusive(idx)
+        return max(idx, end - 1)
 
     def total_clock_minutes(self) -> int:
         """Total clocked minutes from IN/OUT events + active clock-in window."""
@@ -543,11 +590,7 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
             i += 1
             continue
 
-        sub_steps: list[Step] = []
-        j = i + 1
-        while j < len(proc.steps) and proc.steps[j].level == 2:
-            sub_steps.append(proc.steps[j])
-            j += 1
+        descendants = proc.descendants_of(i)
 
         block_lines = 4
         if is_wq:
@@ -560,7 +603,7 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
                 for line in step.note.splitlines() or [step.note]
             )
             block_lines += note_lines
-        for sub in sub_steps:
+        for _, sub in descendants:
             block_lines += 1
             if sub.note:
                 block_lines += sum(
@@ -602,14 +645,15 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
             block_top = cursor_top
             cursor_top = cursor_snapshot
 
-        if sub_steps:
+        if descendants:
             draw_text(block_top + 2, "Subtasks", size=11, font="F2", rgb=subtask_color, x=margin + 16)
             block_top += 18
             cursor_snapshot = cursor_top
             cursor_top = block_top
-            for sub in sub_steps:
+            for _, sub in descendants:
                 sub_status = sub.result or ("DONE" if sub.completed else "OPEN")
-                sub_line = f"- [{sub_status}] {sub.label}"
+                indent = "  " * max(0, sub.level - step.level - 1)
+                sub_line = f"{indent}- [{sub_status}] {sub.label}"
                 if sub.completed_at:
                     sub_line += f"  |  {_format_log_timestamp(sub.completed_at)}"
                 if is_wq or sub.duration_minutes:
@@ -621,7 +665,7 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
             cursor_top = cursor_snapshot
 
         cursor_top += block_height + 12
-        i = j
+        i = proc.subtree_end_exclusive(i)
 
     ensure_space(44)
     draw_rect(cursor_top, 32, fill_rgb=(0.95, 0.96, 0.97))
@@ -693,9 +737,7 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
                 parts.append(f"LT={step.threshold_lower}")
             lines.append(f"     Thresh : {', '.join(parts)}")
 
-        j = i + 1
-        while j < len(proc.steps) and proc.steps[j].level == 2:
-            sub = proc.steps[j]
+        for _, sub in proc.descendants_of(i):
             if sub.result:
                 sym = f"[{sub.result}]"
             elif sub.completed:
@@ -709,7 +751,8 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
                     sub_ts = f"  {dt.strftime('%I:%M:%S %p').lstrip('0')}"
                 except ValueError:
                     sub_ts = f"  {sub.completed_at}"
-            sub_line = f"        {sym}  {sub.label}{sub_ts}"
+            indent = "  " * max(0, sub.level - step.level - 1)
+            sub_line = f"        {indent}{sym}  {sub.label}{sub_ts}"
             if is_wq:
                 sub_line += (
                     f"  |  Hours {_hours_text(sub.duration_minutes)}"
@@ -718,9 +761,8 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
             lines.append(sub_line)
             if sub.note:
                 lines.append(f"               NOTE: {sub.note}")
-            j += 1
 
-        i = j
+        i = proc.subtree_end_exclusive(i)
         lines.append("")
 
     lines += [
