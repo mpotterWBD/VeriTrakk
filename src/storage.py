@@ -49,6 +49,7 @@ class Step:
     threshold_upper: str = ""
     threshold_lower: str = ""
     result: str = ""          # "PASS" | "FAIL" | ""
+    linked_process_path: str = ""
 
     def has_threshold(self) -> bool:
         return bool(self.threshold_upper or self.threshold_lower)
@@ -186,7 +187,7 @@ _FIELDS = [
     "kind", "clocked_in", "clock_active_since", "clock_events",
     "level", "label", "completed", "completed_at",
     "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
-    "note", "threshold_upper", "threshold_lower", "result",
+    "note", "threshold_upper", "threshold_lower", "result", "linked_process_path",
 ]
 
 
@@ -203,7 +204,7 @@ def save_process(proc: Process, file_path: Path) -> None:
             "level": 0, "label": proc.name,
             "completed": proc.completed, "completed_at": proc.completed_at,
             "started": "", "started_at": "", "paused": "", "active_since": "", "duration_minutes": "", "duration_seconds": "",
-            "note": "", "threshold_upper": "", "threshold_lower": "", "result": "",
+            "note": "", "threshold_upper": "", "threshold_lower": "", "result": "", "linked_process_path": "",
         })
         for s in proc.steps:
             w.writerow({
@@ -223,6 +224,7 @@ def save_process(proc: Process, file_path: Path) -> None:
                 "threshold_upper": s.threshold_upper,
                 "threshold_lower": s.threshold_lower,
                 "result": s.result,
+                "linked_process_path": s.linked_process_path,
             })
 
 
@@ -284,6 +286,7 @@ def _load_csv(file_path: Path) -> Process:
             threshold_upper=row.get("threshold_upper", ""),
             threshold_lower=row.get("threshold_lower", ""),
             result=row.get("result", ""),
+            linked_process_path=row.get("linked_process_path", ""),
         ))
     return proc
 
@@ -350,6 +353,7 @@ def _load_legacy(file_path: Path) -> Process:
             threshold_upper=ut,
             threshold_lower=lt,
             result=pf.group(1) if pf else "",
+            linked_process_path="",
         ))
     return proc
 

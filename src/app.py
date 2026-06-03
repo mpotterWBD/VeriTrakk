@@ -95,12 +95,15 @@ def _step_label(
     step: Step,
     *,
     number_prefix: str = "",
+    show_process_badge: bool = False,
     sub_done: int | None = None,
     sub_total: int | None = None,
     live_seconds: int | None = None,
 ) -> Text:
     """Rich Text label for a step node in the run-mode tree."""
     display_label = f"{number_prefix} {step.label}" if number_prefix else step.label
+    if show_process_badge and step.linked_process_path.strip():
+        display_label = f"[P] {display_label}"
     if step.completed:
         if step.result == "PASS":
             t = Text(f"\u2713  {display_label}", style=f"bold {_GREEN}")
@@ -173,6 +176,8 @@ def _builder_label(step: Step, *, number_prefix: str = "") -> Text:
         extras.append("[N]")
     if step.has_threshold():
         extras.append("[T]")
+    if step.linked_process_path:
+        extras.append("[L]")
     if extras:
         t.append(f"  {'  '.join(extras)}", style=f"dim {_KHAKI}")
     return t
@@ -188,6 +193,15 @@ class ProcessFileTree(DirectoryTree):
             if p.is_dir() or (
                 p.suffix in (".prcss", ".wrkqst") and "#COMPLETE" not in p.name
             )
+        ]
+
+
+class PrcssFileTree(DirectoryTree):
+    """Shows directories and active .prcss files only."""
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [
+            p for p in paths
+            if p.is_dir() or (p.suffix == ".prcss" and "#COMPLETE" not in p.name)
         ]
 
 
@@ -659,7 +673,7 @@ class FilePickerScreen(ModalScreen):
         save_ext: str = ".prcss",
     ) -> None:
         super().__init__()
-        self._mode     = mode          # "open" | "save" | "logs"
+        self._mode     = mode          # "open" | "open_prcss" | "save" | "logs"
         self._start    = start or Path.home()
         self._filename = filename
         self._save_ext = save_ext
@@ -668,6 +682,7 @@ class FilePickerScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         titles = {
             "open": "Open Process",
+            "open_prcss": "Link Process",
             "save": "Save Process As",
             "logs": "Browse Logs",
         }
@@ -676,6 +691,8 @@ class FilePickerScreen(ModalScreen):
             yield Static(str(self._start), id="fp_path")
             if self._mode == "open":
                 yield ProcessFileTree(self._start, id="fp_tree")
+            elif self._mode == "open_prcss":
+                yield PrcssFileTree(self._start, id="fp_tree")
             elif self._mode == "save":
                 yield DirOnlyTree(self._start, id="fp_tree")
                 yield Label("Filename")
@@ -698,7 +715,7 @@ class FilePickerScreen(ModalScreen):
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         path = Path(str(event.path))
-        if self._mode in ("open", "logs"):
+        if self._mode in ("open", "open_prcss", "logs"):
             self.dismiss(path)
         elif self._mode == "save":
             self._cur_dir = path.parent
@@ -804,7 +821,10 @@ class VeriTrakkApp(App):
         Binding("d",      "delete_step",   "Delete",      show=False),
         Binding("ctrl+up",   "shift_step_up",   "Shift Up",   show=False),
         Binding("ctrl+down", "shift_step_down", "Shift Down", show=False),
+        Binding("l",      "link_process",    "Link Process", show=False),
         Binding("ctrl+s", "save_build",    "Save",        show=False),
+        Binding("r",      "run_linked_process", "Run Process", show=True),
+        Binding("b",      "back_to_work_quest", "Back To Work Quest", show=True),
         # Global
         Binding("escape", "go_back", "Back", show=True),
         Binding("q",      "quit",    "Quit", show=True),
@@ -820,6 +840,8 @@ class VeriTrakkApp(App):
     _build_kind:        str           = "process"
     _pending_thresh_idx: int           = -1
     _syncing_clock_switch: bool        = False
+    _return_wq_path:    Path | None    = None
+    _return_wq_step_idx: int | None    = None
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
@@ -875,6 +897,7 @@ class VeriTrakkApp(App):
                         yield Input(placeholder="Process name...", id="build_name_inp")
                         yield Button("+ Task",    id="btn_add_step",    variant="success", classes="build_btn")
                         yield Button("+ Sub Task", id="btn_add_sub",     variant="success", classes="build_btn")
+                        yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
                         yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
                         yield Button("Delete",     id="btn_del_step",    variant="error",   classes="build_btn")
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
@@ -1025,8 +1048,10 @@ class VeriTrakkApp(App):
         self.query_one("#btn_add_step", Button).label = f"+ {item_term}"
         self.query_one("#btn_add_sub", Button).label = f"+ {sub_item_term}"
         is_process = self._build_proc is not None and self._build_proc.kind == "process"
+        is_work_quest = self._build_proc is not None and self._build_proc.kind == "work_quest"
         self.query_one("#btn_shift_up", Button).display = is_process
         self.query_one("#btn_shift_down", Button).display = is_process
+        self.query_one("#btn_link_process", Button).display = is_work_quest
 
     # ── Button handling ───────────────────────────────────────────────────────
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1049,6 +1074,8 @@ class VeriTrakkApp(App):
             self.action_add_step(); return
         if bid == "btn_add_sub":
             self.action_add_sub_step(); return
+        if bid == "btn_link_process":
+            self.action_link_process(); return
         if bid == "btn_edit_step":
             self.action_edit_step(); return
         if bid == "btn_del_step":
@@ -1090,6 +1117,7 @@ class VeriTrakkApp(App):
         self._load_process(path)
 
     def _load_process(self, file_path: Path) -> None:
+        self._clear_work_quest_return_context()
         # Base .prcss files are reusable templates — prompt for run ID then spawn a fresh instance.
         if is_base_process(file_path):
             self.push_screen(
@@ -1127,6 +1155,10 @@ class VeriTrakkApp(App):
         self._sync_parent_states_from_children()
         save_session(file_path.parent, file_path.name)
         self._show_run()
+
+    def _clear_work_quest_return_context(self) -> None:
+        self._return_wq_path = None
+        self._return_wq_step_idx = None
 
     def _is_work_quest_active(self) -> bool:
         return (
@@ -1404,6 +1436,7 @@ class VeriTrakkApp(App):
                     _step_label(
                         step,
                         number_prefix=number_prefix,
+                        show_process_badge=proc.kind == "work_quest",
                         sub_done=sub_done,
                         sub_total=sub_total,
                         live_seconds=self._live_step_seconds(idx, now),
@@ -1417,6 +1450,7 @@ class VeriTrakkApp(App):
                     _step_label(
                         step,
                         number_prefix=number_prefix,
+                        show_process_badge=proc.kind == "work_quest",
                         live_seconds=self._live_step_seconds(idx, now),
                     ),
                     data=idx,
@@ -1443,6 +1477,7 @@ class VeriTrakkApp(App):
                     _step_label(
                         step,
                         number_prefix=number_prefix,
+                        show_process_badge=proc.kind == "work_quest",
                         sub_done=sub_done if children else None,
                         sub_total=sub_total if children else None,
                         live_seconds=self._live_step_seconds(idx, now),
@@ -1576,6 +1611,10 @@ class VeriTrakkApp(App):
                 parts.append(f"Lower \u2265 {step.threshold_lower}")
             t.append("\nThreshold\n", style="dim")
             t.append("\n".join(parts), style=_TEAL)
+        if step.linked_process_path and self._process.kind == "work_quest":
+            link_name = Path(step.linked_process_path).name
+            t.append("\nLinked Process\n", style="dim")
+            t.append(link_name, style=_BLUE)
         info.update(t)
         self._refresh_focus_cursor_state()
 
@@ -1620,6 +1659,23 @@ class VeriTrakkApp(App):
             return
 
         if step.completed:
+            return
+
+        if self._process.kind == "work_quest" and step.linked_process_path.strip():
+            linked_done, resolved_path = self._linked_process_status(step)
+            if resolved_path is not None and str(resolved_path) != step.linked_process_path:
+                step.linked_process_path = str(resolved_path)
+                save_process(self._process, self._proc_path)
+            if linked_done:
+                self.notify(
+                    "This task is linked and auto-completes when the linked process is done.",
+                    severity="information",
+                )
+            else:
+                self.notify(
+                    "Complete the linked process first. This task auto-completes.",
+                    severity="warning",
+                )
             return
 
         # Work quest flow: first right starts, second right completes.
@@ -1800,6 +1856,129 @@ class VeriTrakkApp(App):
         self._refresh_status()
         self._update_step_info()
 
+    def _focused_run_idx(self) -> int | None:
+        node = self.query_one("#process_tree", Tree).cursor_node
+        return None if (node is None or node.data is None) else node.data
+
+    def _current_linked_process_path(self) -> Path | None:
+        if self._mode != "run" or not self._process or self._process.kind != "work_quest":
+            return None
+        step_idx = self._focused_run_idx()
+        if step_idx is None:
+            return None
+        raw = self._process.steps[step_idx].linked_process_path.strip()
+        if not raw:
+            return None
+        step = self._process.steps[step_idx]
+        _, resolved_path = self._linked_process_status(step)
+        return resolved_path or Path(raw)
+
+    def _linked_process_status(self, step: Step) -> tuple[bool, Path | None]:
+        raw = step.linked_process_path.strip()
+        if not raw:
+            return (False, None)
+
+        linked_path = Path(raw)
+        candidates: list[Path] = [linked_path]
+        if "#COMPLETE" not in linked_path.stem:
+            candidates.append(linked_path.with_name(f"{linked_path.stem}#COMPLETE{linked_path.suffix}"))
+
+        existing: Path | None = None
+        for cand in candidates:
+            if cand.exists():
+                existing = cand
+                break
+        if existing is None:
+            return (False, None)
+
+        if "#COMPLETE" in existing.name:
+            return (True, existing)
+
+        try:
+            linked_proc = load_process(existing)
+        except OSError:
+            return (False, existing)
+        return (linked_proc.completed or linked_proc.is_fully_complete(), existing)
+
+    def _auto_complete_linked_task(self, step_idx: int) -> bool:
+        if not self._process or self._process.kind != "work_quest":
+            return False
+        if step_idx < 0 or step_idx >= len(self._process.steps):
+            return False
+
+        step = self._process.steps[step_idx]
+        if not step.linked_process_path.strip() or step.completed or not step.started:
+            return False
+
+        linked_done, resolved_path = self._linked_process_status(step)
+        if resolved_path is not None and str(resolved_path) != step.linked_process_path:
+            step.linked_process_path = str(resolved_path)
+        if not linked_done:
+            return False
+
+        self._do_complete(step_idx)
+        return True
+
+    def action_run_linked_process(self) -> None:
+        link_path = self._current_linked_process_path()
+        if link_path is None or not self._process or not self._proc_path:
+            return
+        if not link_path.exists() or link_path.suffix != ".prcss":
+            self.notify("Linked process file is missing.", severity="error")
+            return
+
+        step_idx = self._focused_run_idx()
+        if step_idx is None:
+            return
+
+        step = self._process.steps[step_idx]
+
+        # Keep the same in-progress blocking behavior: no other active task may be running.
+        active_idx = self._active_step_idx(exclude_idx=step_idx)
+        if active_idx is not None:
+            self.notify("Pause the active task before running a linked process.", severity="warning")
+            return
+
+        # Edge case rule: launching from a paused task is not allowed.
+        if step.started and not step.completed and step.paused:
+            self.notify("Unpause this task before running its linked process.", severity="warning")
+            return
+
+        # Launching a linked process moves this task into active in-progress state.
+        now_iso = datetime.now().isoformat()
+        if not step.started:
+            step.started = True
+            step.started_at = step.started_at or now_iso
+        step.completed = False
+        step.completed_at = ""
+        step.paused = False
+        step.active_since = now_iso
+        self._sync_parent_states_from_children()
+
+        # Persist current work quest state before switching context.
+        save_process(self._process, self._proc_path)
+        self._return_wq_path = self._proc_path
+        self._return_wq_step_idx = step_idx
+        self._open_process_file(link_path)
+        self._focus_first_incomplete_run_step()
+
+    def action_back_to_work_quest(self) -> None:
+        if self._return_wq_path is None:
+            return
+        if not self._return_wq_path.exists():
+            self.notify("Original work quest file is missing.", severity="error")
+            self._clear_work_quest_return_context()
+            return
+
+        target_path = self._return_wq_path
+        target_idx = self._return_wq_step_idx
+        self._clear_work_quest_return_context()
+        self._open_process_file(target_path)
+        if target_idx is not None:
+            if self._auto_complete_linked_task(target_idx):
+                self.notify("Linked process complete. Task auto-completed.", severity="information")
+            self._move_run_cursor_to(target_idx)
+
     def _on_note_result(self, step_idx: int, notes_text: str | None) -> None:
         if notes_text is None:
             return
@@ -1809,6 +1988,43 @@ class VeriTrakkApp(App):
         save_process(self._process, self._proc_path)
         self._rebuild_proc_tree()
         self._update_step_info()
+
+    def _move_run_cursor_to(self, target_idx: int) -> None:
+        self.call_after_refresh(self._do_move_run_cursor, target_idx)
+
+    def _focus_first_incomplete_run_step(self) -> None:
+        if not self._process:
+            return
+        proc = self._process
+
+        # Prefer first incomplete actionable step (leaf), fallback to first incomplete node.
+        target_idx: int | None = None
+        for idx, step in enumerate(proc.steps):
+            if step.completed:
+                continue
+            if not proc.has_children(idx):
+                target_idx = idx
+                break
+            if target_idx is None:
+                target_idx = idx
+
+        if target_idx is not None:
+            self._move_run_cursor_to(target_idx)
+
+    def _do_move_run_cursor(self, target_idx: int) -> None:
+        tree = self.query_one("#process_tree", Tree)
+
+        def _find(node) -> bool:
+            if node.data == target_idx:
+                tree.move_cursor(node)
+                return True
+            for child in node.children:
+                if _find(child):
+                    return True
+            return False
+
+        _find(tree.root)
+        tree.focus()
 
     # ── File rename helpers ───────────────────────────────────────────────────
     def _mark_complete_file(self) -> None:
@@ -1865,6 +2081,32 @@ class VeriTrakkApp(App):
     def _focused_build_idx(self) -> int | None:
         node = self.query_one("#builder_tree", Tree).cursor_node
         return None if (node is None or node.data is None) else node.data
+
+    def action_link_process(self) -> None:
+        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "work_quest":
+            return
+        step_idx = self._focused_build_idx()
+        if step_idx is None:
+            self.notify("Select a task or sub task first.", severity="warning")
+            return
+
+        root = Path.home()
+        self.push_screen(
+            FilePickerScreen("open_prcss", start=root),
+            callback=lambda path: self._on_link_process_selected(step_idx, path),
+        )
+
+    def _on_link_process_selected(self, step_idx: int, path: Path | None) -> None:
+        if path is None or not self._build_proc:
+            return
+        if path.suffix != ".prcss" or "#" not in path.stem:
+            self.notify("Select a process instance file (.prcss with '#').", severity="warning")
+            return
+
+        self._build_proc.steps[step_idx].linked_process_path = str(path)
+        self._rebuild_builder_tree()
+        self._move_builder_cursor_to(step_idx)
+        self.notify(f"Linked: {path.name}", severity="information")
 
     def _move_builder_cursor_to(self, target_idx: int) -> None:
         """Schedule a cursor move to the node with data==target_idx after the tree redraws."""
@@ -2144,6 +2386,7 @@ class VeriTrakkApp(App):
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         if event.node.tree.id == "process_tree":
             self._update_step_info()
+            self.refresh_bindings()
 
     # ── Binding guards ────────────────────────────────────────────────────────
     def check_action(self, action: str, parameters: tuple) -> bool | None:
@@ -2153,6 +2396,13 @@ class VeriTrakkApp(App):
             return self._mode == "run"
         if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
             return self._mode == "build" and not isinstance(self.focused, Input)
+        if action == "link_process":
+            return (
+                self._mode == "build"
+                and not isinstance(self.focused, Input)
+                and self._build_proc is not None
+                and self._build_proc.kind == "work_quest"
+            )
         if action in ("shift_step_up", "shift_step_down"):
             return (
                 self._mode == "build"
@@ -2160,6 +2410,10 @@ class VeriTrakkApp(App):
                 and self._build_proc is not None
                 and self._build_proc.kind == "process"
             )
+        if action == "run_linked_process":
+            return self._current_linked_process_path() is not None
+        if action == "back_to_work_quest":
+            return self._mode == "run" and self._return_wq_path is not None
         if action == "save_build":
             return self._mode == "build"
         return True
