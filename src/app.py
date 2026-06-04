@@ -1837,8 +1837,18 @@ class VeriTrakkApp(App):
             tree.add_class("cursor-pending")
 
     # ── Run-mode bindings ─────────────────────────────────────────────────────
+    def _work_quest_actions_locked(self) -> bool:
+        if not self._process or self._process.kind != "work_quest":
+            return False
+        if self._process.clocked_in:
+            return False
+        self.notify("Clock in to modify work quest tasks.", severity="warning")
+        return True
+
     def action_complete_step(self) -> None:
         if self._mode != "run" or not self._process:
+            return
+        if self._work_quest_actions_locked():
             return
         tree = self.query_one("#process_tree", Tree)
         node = tree.cursor_node
@@ -1849,9 +1859,6 @@ class VeriTrakkApp(App):
 
         # Parent steps with children are fully derived from child state.
         if self._process.has_children(step_idx):
-            return
-
-        if self._process.kind == "work_quest" and not self._process.clocked_in:
             return
 
         if step.completed:
@@ -2021,6 +2028,8 @@ class VeriTrakkApp(App):
     def action_uncomplete_step(self) -> None:
         if self._mode != "run" or not self._process:
             return
+        if self._work_quest_actions_locked():
+            return
         tree = self.query_one("#process_tree", Tree)
         node = tree.cursor_node
         if node is None or node.data is None:
@@ -2065,6 +2074,8 @@ class VeriTrakkApp(App):
     def action_note_step(self) -> None:
         if self._mode != "run" or not self._process:
             return
+        if self._work_quest_actions_locked():
+            return
         tree = self.query_one("#process_tree", Tree)
         node = tree.cursor_node
         if node is None or node.data is None:
@@ -2077,6 +2088,8 @@ class VeriTrakkApp(App):
 
     def action_pause_step(self) -> None:
         if self._mode != "run" or not self._process or self._process.kind != "work_quest":
+            return
+        if self._work_quest_actions_locked():
             return
         tree = self.query_one("#process_tree", Tree)
         node = tree.cursor_node
@@ -2173,6 +2186,8 @@ class VeriTrakkApp(App):
     def action_run_linked_process(self) -> None:
         link_path = self._current_linked_process_path()
         if link_path is None or not self._process or not self._proc_path:
+            return
+        if self._work_quest_actions_locked():
             return
         if not link_path.exists() or link_path.suffix != ".prcss":
             self.notify("Linked process file is missing.", severity="error")
