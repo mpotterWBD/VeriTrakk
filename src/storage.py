@@ -48,6 +48,9 @@ class Step:
     note: str = ""
     threshold_upper: str = ""
     threshold_lower: str = ""
+    manual_pass_fail: bool = False
+    requires_text_input: bool = False
+    captured_text_input: str = ""
     result: str = ""          # "PASS" | "FAIL" | ""
     linked_process_path: str = ""
 
@@ -188,7 +191,7 @@ _FIELDS = [
     "kind", "spawn_instances", "clocked_in", "clock_active_since", "clock_events",
     "level", "label", "completed", "completed_at",
     "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
-    "note", "threshold_upper", "threshold_lower", "result", "linked_process_path",
+    "note", "threshold_upper", "threshold_lower", "manual_pass_fail", "requires_text_input", "captured_text_input", "result", "linked_process_path",
 ]
 
 
@@ -206,7 +209,7 @@ def save_process(proc: Process, file_path: Path) -> None:
             "level": 0, "label": proc.name,
             "completed": proc.completed, "completed_at": proc.completed_at,
             "started": "", "started_at": "", "paused": "", "active_since": "", "duration_minutes": "", "duration_seconds": "",
-            "note": "", "threshold_upper": "", "threshold_lower": "", "result": "", "linked_process_path": "",
+            "note": "", "threshold_upper": "", "threshold_lower": "", "manual_pass_fail": "", "requires_text_input": "", "captured_text_input": "", "result": "", "linked_process_path": "",
         })
         for s in proc.steps:
             w.writerow({
@@ -225,6 +228,9 @@ def save_process(proc: Process, file_path: Path) -> None:
                 "note": s.note,
                 "threshold_upper": s.threshold_upper,
                 "threshold_lower": s.threshold_lower,
+                "manual_pass_fail": s.manual_pass_fail,
+                "requires_text_input": s.requires_text_input,
+                "captured_text_input": s.captured_text_input,
                 "result": s.result,
                 "linked_process_path": s.linked_process_path,
             })
@@ -290,6 +296,9 @@ def _load_csv(file_path: Path) -> Process:
             note=row.get("note", ""),
             threshold_upper=row.get("threshold_upper", ""),
             threshold_lower=row.get("threshold_lower", ""),
+            manual_pass_fail=row.get("manual_pass_fail", "false").strip().lower() in ("true", "1", "yes", "on"),
+            requires_text_input=row.get("requires_text_input", "false").strip().lower() in ("true", "1", "yes", "on"),
+            captured_text_input=row.get("captured_text_input", ""),
             result=row.get("result", ""),
             linked_process_path=row.get("linked_process_path", ""),
         ))
@@ -357,6 +366,9 @@ def _load_legacy(file_path: Path) -> Process:
             note=_note(raw),
             threshold_upper=ut,
             threshold_lower=lt,
+            manual_pass_fail=False,
+            requires_text_input=False,
+            captured_text_input="",
             result=pf.group(1) if pf else "",
             linked_process_path="",
         ))

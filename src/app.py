@@ -172,10 +172,12 @@ def _builder_label(step: Step, *, number_prefix: str = "") -> Text:
     label = f"{number_prefix} {step.label}" if number_prefix else step.label
     t = Text(f"{prefix}{label}")
     extras: list[str] = []
-    if step.note:
-        extras.append("[N]")
     if step.has_threshold():
         extras.append("[T]")
+    if step.manual_pass_fail:
+        extras.append("[B]")
+    if step.requires_text_input:
+        extras.append("[I]")
     if step.linked_process_path:
         extras.append("[L]")
     if extras:
@@ -424,8 +426,69 @@ class ThresholdScreen(ModalScreen):
         self.dismiss(self.query_one("#thresh_inp", Input).value.strip())
 
 
+class ManualResultScreen(ModalScreen):
+    """Prompt operator to manually choose PASS or FAIL for a step."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self._label = label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Static("Manual Pass/Fail", id="modal_title")
+            yield Static(self._label, id="thresh_step_label")
+            yield Static("Did this step pass or fail?", id="thresh_bounds")
+            with Horizontal(id="modal_btns"):
+                yield Button("Pass", variant="success", id="btn_pass")
+                yield Button("Fail", variant="error", id="btn_fail")
+                yield Button("Cancel", variant="default", id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_pass":
+            self.dismiss("PASS")
+        elif event.button.id == "btn_fail":
+            self.dismiss("FAIL")
+        else:
+            self.dismiss(None)
+
+
+class RequiredTextScreen(ModalScreen):
+    """Prompt operator for required text entry (e.g., serial number)."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self._label = label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Static("Required Text Entry", id="modal_title")
+            yield Static(self._label, id="thresh_step_label")
+            yield Static("Enter required text (e.g., serial number)", id="thresh_bounds")
+            yield Input(placeholder="Type required text...", id="required_text_inp")
+            with Horizontal(id="modal_btns"):
+                yield Button("Submit", variant="primary", id="btn_submit")
+                yield Button("Cancel", variant="default", id="btn_cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_submit":
+            self.dismiss(self.query_one("#required_text_inp", Input).value.strip())
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.dismiss(self.query_one("#required_text_inp", Input).value.strip())
+
+
 class StepScreen(ModalScreen):
-    """Add or edit a task: label, optional note, optional thresholds."""
+    """Add or edit a task with optional validation controls."""
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("up", "prev_item", "Previous Item", show=False),
@@ -446,31 +509,84 @@ class StepScreen(ModalScreen):
         self._allow_thresholds = allow_thresholds
         self._multi_mode = multi_mode
         self._parent_label = parent_label
-        self._items: list[dict[str, str]] = []
+        self._items: list[dict[str, str | bool]] = []
         self._idx = 0
 
-    def _input_payload(self) -> dict[str, str]:
+    @staticmethod
+    def _parse_float(raw: str) -> float | None:
+        text = raw.strip().replace(",", "")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_percent(raw: str) -> float | None:
+        text = raw.strip().replace("%", "")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _format_number(value: float) -> str:
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+
+    def _apply_tolerance_thresholds(self) -> None:
+        if not self._allow_thresholds:
+            return
+        nominal_raw = self.query_one("#step_nominal", Input).value
+        tolerance_raw = self.query_one("#step_tolerance", Input).value
+        nominal = self._parse_float(nominal_raw)
+        tolerance_pct = self._parse_percent(tolerance_raw)
+        if nominal is None or tolerance_pct is None:
+            return
+
+        delta = nominal * (abs(tolerance_pct) / 100.0)
+        upper = nominal + delta
+        lower = nominal - delta
+        self.query_one("#step_ut", Input).value = self._format_number(upper)
+        self.query_one("#step_lt", Input).value = self._format_number(lower)
+
+    def _input_payload(self) -> dict[str, str | bool]:
         upper = self.query_one("#step_ut", Input).value.strip() if self._allow_thresholds else ""
         lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
+        nominal = self.query_one("#step_nominal", Input).value.strip() if self._allow_thresholds else ""
+        tolerance = self.query_one("#step_tolerance", Input).value.strip() if self._allow_thresholds else ""
+        manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
+        requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
         return {
             "label": self.query_one("#step_label", Input).value.strip(),
-            "note": self.query_one("#step_note", Input).value.strip(),
             "threshold_upper": upper,
             "threshold_lower": lower,
+            "target_value": nominal,
+            "tolerance_pct": tolerance,
+            "manual_pass_fail": manual_pf,
+            "requires_text_input": requires_text_input,
         }
 
-    def _set_inputs_from_payload(self, payload: dict[str, str] | None = None) -> None:
+    def _set_inputs_from_payload(self, payload: dict[str, str | bool] | None = None) -> None:
         payload = payload or {
             "label": "",
-            "note": "",
             "threshold_upper": "",
             "threshold_lower": "",
+            "target_value": "",
+            "tolerance_pct": "",
+            "manual_pass_fail": False,
+            "requires_text_input": False,
         }
         self.query_one("#step_label", Input).value = payload.get("label", "")
-        self.query_one("#step_note", Input).value = payload.get("note", "")
         if self._allow_thresholds:
+            self.query_one("#step_nominal", Input).value = payload.get("target_value", "")
+            self.query_one("#step_tolerance", Input).value = payload.get("tolerance_pct", "")
             self.query_one("#step_ut", Input).value = payload.get("threshold_upper", "")
             self.query_one("#step_lt", Input).value = payload.get("threshold_lower", "")
+            self.query_one("#step_manual_pf", Switch).value = bool(payload.get("manual_pass_fail", False))
+            self.query_one("#step_requires_text", Switch).value = bool(payload.get("requires_text_input", False))
 
     def _is_draft(self) -> bool:
         return self._idx >= len(self._items)
@@ -505,10 +621,12 @@ class StepScreen(ModalScreen):
         lines: list[str] = []
         for i, item in enumerate(self._items, start=1):
             parts = [f"{i}. {item['label']}"]
-            if item["note"]:
-                parts.append("[N]")
             if item["threshold_upper"] or item["threshold_lower"]:
                 parts.append("[T]")
+            if bool(item.get("manual_pass_fail", False)):
+                parts.append("[B]")
+            if bool(item.get("requires_text_input", False)):
+                parts.append("[I]")
             lines.append("  ".join(parts))
         preview.update("\n".join(lines) if lines else "No saved items yet.")
 
@@ -537,22 +655,51 @@ class StepScreen(ModalScreen):
                 value=ex.label if ex else "",
                 placeholder="Task name...", id="step_label",
             )
-            yield Label("Note  (optional)")
-            yield Input(
-                value=ex.note if ex else "",
-                placeholder="Note...", id="step_note",
-            )
             if self._allow_thresholds:
-                yield Label("Upper Threshold  (optional)")
+                yield Static(
+                    "Value is a user defined number that the upper and lower limits are based on. "
+                    "Tolerance represents the percentage above and below the target value.",
+                    id="step_thresh_help",
+                )
+                yield Label("Target Value +/- Tolerance")
+                with Horizontal(id="step_tol_row"):
+                    yield Input(
+                        placeholder="Value, e.g. 3.3", id="step_nominal",
+                    )
+                    yield Static("", id="step_tol_divider")
+                    yield Input(
+                        placeholder="Tolerance, e.g. 5%", id="step_tolerance",
+                    )
+                yield Static(
+                    "User defined Max and Min values.",
+                    id="step_thresh_hint",
+                )
+                yield Label("Upper Limit  (optional)")
                 yield Input(
                     value=ex.threshold_upper if ex else "",
-                    placeholder="e.g. 5.3", id="step_ut",
+                    placeholder="Max pass value, e.g. 5.3", id="step_ut",
                 )
-                yield Label("Lower Threshold  (optional)")
+                yield Label("Lower Limit  (optional)")
                 yield Input(
                     value=ex.threshold_lower if ex else "",
-                    placeholder="e.g. 4.7", id="step_lt",
+                    placeholder="Min pass value, e.g. 4.7", id="step_lt",
                 )
+                yield Label("Boolean  (manual pass/fail)")
+                yield Static(
+                    "When enabled, the operator decides PASS or FAIL.",
+                    id="step_boolean_desc",
+                )
+                with Horizontal(id="step_boolean_row"):
+                    yield Switch(value=ex.manual_pass_fail if ex else False, id="step_manual_pf")
+                    yield Static("Pass/Fail", id="step_boolean_label")
+                yield Label("Input Required")
+                yield Static(
+                    "When enabled, operator must enter text (e.g., serial number) during run.",
+                    id="step_input_desc",
+                )
+                with Horizontal(id="step_input_row"):
+                    yield Switch(value=ex.requires_text_input if ex else False, id="step_requires_text")
+                    yield Static("Text Input", id="step_input_label")
             if self._multi_mode:
                 with Horizontal(id="note_nav_btns"):
                     yield Button("Up",      variant="default", id="btn_prev")
@@ -616,6 +763,12 @@ class StepScreen(ModalScreen):
     def on_input_submitted(self, _: Input.Submitted) -> None:
         self._submit()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if not self._allow_thresholds:
+            return
+        if event.input.id in ("step_nominal", "step_tolerance"):
+            self._apply_tolerance_thresholds()
+
     def _submit(self) -> None:
         if self._multi_mode:
             self._commit_current()
@@ -630,11 +783,14 @@ class StepScreen(ModalScreen):
             return
         upper = self.query_one("#step_ut", Input).value.strip() if self._allow_thresholds else ""
         lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
+        manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
+        requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
         self.dismiss({
             "label":           label,
-            "note":            self.query_one("#step_note", Input).value.strip(),
             "threshold_upper": upper,
             "threshold_lower": lower,
+            "manual_pass_fail": manual_pf,
+            "requires_text_input": requires_text_input,
         })
 
 
@@ -747,7 +903,7 @@ class RunIDScreen(ModalScreen):
         self._process_name = process_name
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal_box"):
+        with Vertical(id="run_id_box"):
             yield Static("Start New Run", id="modal_title")
             yield Static(self._process_name, id="thresh_step_label")
             yield Label("Unique Run Identifier  (optional)")
@@ -843,6 +999,8 @@ class VeriTrakkApp(App):
     _build_kind:        str           = "process"
     _build_spawn_instances: bool      = True
     _pending_thresh_idx: int           = -1
+    _pending_manual_idx: int           = -1
+    _pending_text_idx: int             = -1
     _syncing_clock_switch: bool        = False
     _return_wq_path:    Path | None    = None
     _return_wq_step_idx: int | None    = None
@@ -1637,6 +1795,15 @@ class VeriTrakkApp(App):
                 parts.append(f"Lower \u2265 {step.threshold_lower}")
             t.append("\nThreshold\n", style="dim")
             t.append("\n".join(parts), style=_TEAL)
+        if step.manual_pass_fail:
+            t.append("\nBoolean Check\n", style="dim")
+            t.append("Operator decides PASS or FAIL", style=_TEAL)
+        if step.requires_text_input:
+            t.append("\nText Input Required\n", style="dim")
+            t.append("Operator must enter text before completion", style=_TEAL)
+            if step.captured_text_input.strip():
+                t.append("\nCaptured Input\n", style="dim")
+                t.append(step.captured_text_input, style=_KHAKI)
         if step.linked_process_path and self._process.kind == "work_quest":
             link_name = Path(step.linked_process_path).name
             t.append("\nLinked Process\n", style="dim")
@@ -1649,6 +1816,7 @@ class VeriTrakkApp(App):
         tree.remove_class("cursor-started")
         tree.remove_class("cursor-paused")
         tree.remove_class("cursor-pending")
+        tree.remove_class("cursor-failed")
 
         if self._mode != "run" or not self._process:
             return
@@ -1663,6 +1831,8 @@ class VeriTrakkApp(App):
                 tree.add_class("cursor-paused")
             else:
                 tree.add_class("cursor-started")
+        elif step.completed and step.result == "FAIL":
+            tree.add_class("cursor-failed")
         elif not step.completed:
             tree.add_class("cursor-pending")
 
@@ -1723,7 +1893,19 @@ class VeriTrakkApp(App):
             self._update_step_info()
             return
 
-        if step.has_threshold():
+        if step.requires_text_input:
+            self._pending_text_idx = step_idx
+            self.push_screen(
+                RequiredTextScreen(step.label),
+                callback=self._on_required_text,
+            )
+        elif step.manual_pass_fail:
+            self._pending_manual_idx = step_idx
+            self.push_screen(
+                ManualResultScreen(step.label),
+                callback=self._on_manual_result,
+            )
+        elif step.has_threshold():
             self._pending_thresh_idx = step_idx
             self.push_screen(
                 ThresholdScreen(step.label, step.threshold_upper, step.threshold_lower),
@@ -1732,10 +1914,52 @@ class VeriTrakkApp(App):
         else:
             self._do_complete(step_idx)
 
+    def _on_required_text(self, entered_text: str | None) -> None:
+        if self._pending_text_idx < 0:
+            return
+        step_idx = self._pending_text_idx
+        self._pending_text_idx = -1
+        if entered_text is None:
+            return
+        text = entered_text.strip()
+        if not text:
+            self.notify("Text entry is required for this step.", severity="warning")
+            return
+
+        step = self._process.steps[step_idx]
+        step.captured_text_input = text
+
+        if step.manual_pass_fail:
+            self._pending_manual_idx = step_idx
+            self.push_screen(
+                ManualResultScreen(step.label),
+                callback=self._on_manual_result,
+            )
+        elif step.has_threshold():
+            self._pending_thresh_idx = step_idx
+            self.push_screen(
+                ThresholdScreen(step.label, step.threshold_upper, step.threshold_lower),
+                callback=self._on_threshold_result,
+            )
+        else:
+            self._do_complete(step_idx)
+
+    def _on_manual_result(self, result: str | None) -> None:
+        if self._pending_manual_idx < 0:
+            return
+        step_idx = self._pending_manual_idx
+        self._pending_manual_idx = -1
+        if result is None:
+            return
+        if result not in ("PASS", "FAIL"):
+            return
+        self._do_complete(step_idx, result=result)
+
     def _on_threshold_result(self, value_str: str | None) -> None:
         if value_str is None or self._pending_thresh_idx < 0:
             return
         step_idx = self._pending_thresh_idx
+        self._pending_thresh_idx = -1
         step     = self._process.steps[step_idx]
         try:
             value = float(value_str)
@@ -1823,6 +2047,7 @@ class VeriTrakkApp(App):
         step.result       = ""
         step.duration_minutes = 0
         step.duration_seconds = 0
+        step.captured_text_input = ""
 
         self._sync_parent_states_from_children()
 
@@ -2184,9 +2409,10 @@ class VeriTrakkApp(App):
         for offset, item in enumerate(items):
             self._build_proc.steps.insert(insert_at + offset, Step(
                 label=item["label"], level=1,
-                note=item["note"],
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
+                manual_pass_fail=bool(item.get("manual_pass_fail", False)),
+                requires_text_input=bool(item.get("requires_text_input", False)),
             ))
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
@@ -2224,9 +2450,10 @@ class VeriTrakkApp(App):
         for offset, item in enumerate(items):
             proc.steps.insert(insert_at + offset, Step(
                 label=item["label"], level=step.level + 1,
-                note=item["note"],
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
+                manual_pass_fail=bool(item.get("manual_pass_fail", False)),
+                requires_text_input=bool(item.get("requires_text_input", False)),
             ))
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
@@ -2254,9 +2481,10 @@ class VeriTrakkApp(App):
             return
         step = self._build_proc.steps[step_idx]
         step.label           = data["label"]
-        step.note            = data["note"]
         step.threshold_upper = data["threshold_upper"]
         step.threshold_lower = data["threshold_lower"]
+        step.manual_pass_fail = bool(data.get("manual_pass_fail", False))
+        step.requires_text_input = bool(data.get("requires_text_input", False))
         self._rebuild_builder_tree()
 
     def action_delete_step(self) -> None:

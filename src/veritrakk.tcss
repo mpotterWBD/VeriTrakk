@@ -357,6 +357,11 @@ Tree > .tree--cursor {
     color: #f5f5f5;
 }
 
+#process_tree.cursor-failed > .tree--cursor {
+    background: #2a1212;
+    color: #ff8a8a;
+}
+
 Tree > .tree--highlight {
     background: transparent;
 }
@@ -379,6 +384,9 @@ ThresholdScreen,
 StepScreen,
 ConfirmScreen,
 NewFileTypeScreen,
+RunIDScreen,
+ManualResultScreen,
+RequiredTextScreen,
 CarrotsScreen {
     align: center middle;
 }
@@ -401,6 +409,19 @@ CarrotsScreen {
     max-height: 90%;
 }
 
+#run_id_box {
+    background: #181818;
+    border: double darkseagreen;
+    padding: 1 2;
+    width: 84;
+    height: auto;
+    max-height: 90%;
+}
+
+#run_id_box Label {
+    padding-top: 1;
+}
+
 #modal_title {
     color: lightsalmon;
     text-style: bold;
@@ -416,6 +437,74 @@ CarrotsScreen {
 
 #thresh_bounds {
     color: cadetblue;
+    padding-bottom: 1;
+}
+
+#step_thresh_help {
+    color: cadetblue;
+    padding-top: 1;
+    padding-bottom: 1;
+}
+
+#step_tol_row {
+    width: 100%;
+    height: 3;
+    align: center middle;
+}
+
+#step_tol_row Input {
+    width: 1fr;
+    margin-right: 0;
+    text-align: center;
+}
+
+#step_tol_divider {
+    width: 1;
+    height: 3;
+    background: #2f2f2f;
+}
+
+#step_thresh_hint {
+    color: #7aa9ab;
+    padding-top: 1;
+    padding-bottom: 1;
+}
+
+#step_boolean_row {
+    width: 100%;
+    height: 3;
+    align: left middle;
+}
+
+#step_boolean_label {
+    color: darkkhaki;
+    height: 3;
+    content-align: left middle;
+    padding-left: 1;
+}
+
+#step_boolean_desc {
+    color: #7aa9ab;
+    padding-top: 1;
+    padding-bottom: 1;
+}
+
+#step_input_row {
+    width: 100%;
+    height: 3;
+    align: left middle;
+}
+
+#step_input_label {
+    color: darkkhaki;
+    height: 3;
+    content-align: left middle;
+    padding-left: 1;
+}
+
+#step_input_desc {
+    color: #7aa9ab;
+    padding-top: 1;
     padding-bottom: 1;
 }
 
@@ -462,6 +551,11 @@ StepScreen Label {
     border-bottom: solid goldenrod;
     color: goldenrod;
     background: #111;
+}
+
+StepScreen #modal_box Input {
+    height: 3;
+    padding: 1 1 0 1;
 }
 
 #modal_btns {
