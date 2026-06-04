@@ -1820,6 +1820,24 @@ class VeriTrakkApp(App):
         if step.note:
             t.append("\nNotes\n", style="dim")
             t.append(step.note, style=_KHAKI)
+        # Work quest parent nodes can summarize notes from child tasks.
+        if self._process.kind == "work_quest" and self._process.has_children(step_idx):
+            child_notes: list[tuple[str, str]] = []
+            for child_idx, child in self._process.descendants_of(step_idx):
+                if not child.note.strip():
+                    continue
+                child_label = child.label
+                if self._process.has_children(child_idx):
+                    child_label = f"{child_label} (parent)"
+                child_notes.append((child_label, child.note.strip()))
+
+            if child_notes:
+                t.append("\nChild Task Notes\n", style="dim")
+                for i, (child_label, child_note) in enumerate(child_notes):
+                    t.append(f"[{child_label}]\n", style=f"bold {_BLUE}")
+                    t.append(child_note, style=_KHAKI)
+                    if i < len(child_notes) - 1:
+                        t.append("\n\n", style="dim")
         # Threshold
         if step.has_threshold():
             parts: list[str] = []
@@ -2053,11 +2071,16 @@ class VeriTrakkApp(App):
             proc.completed_at = now.isoformat()
             self._mark_complete_file()
 
+        next_idx = self._next_completable_run_idx(after_idx=step_idx)
+
         save_process(proc, self._proc_path)
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
         self._refresh_status()
-        self._update_step_info()
+        if next_idx is not None:
+            self._move_run_cursor_to(next_idx)
+        else:
+            self._update_step_info()
 
     def action_uncomplete_step(self) -> None:
         if self._mode != "run" or not self._process:
@@ -2131,6 +2154,14 @@ class VeriTrakkApp(App):
             return
 
         step_idx = node.data
+        if self._process.has_children(step_idx):
+            for child_idx, child in self._process.descendants_of(step_idx):
+                if self._process.has_children(child_idx):
+                    continue
+                if child.started and not child.completed:
+                    step_idx = child_idx
+                    break
+
         step = self._process.steps[step_idx]
         if not step.started or step.completed:
             return
@@ -2291,6 +2322,22 @@ class VeriTrakkApp(App):
 
     def _move_run_cursor_to(self, target_idx: int) -> None:
         self.call_after_refresh(self._do_move_run_cursor, target_idx)
+
+    def _next_completable_run_idx(self, after_idx: int) -> int | None:
+        if not self._process or not self._process.steps:
+            return None
+        proc = self._process
+
+        def _is_completable(idx: int) -> bool:
+            return not proc.steps[idx].completed and not proc.has_children(idx)
+
+        for idx in range(after_idx + 1, len(proc.steps)):
+            if _is_completable(idx):
+                return idx
+        for idx in range(0, after_idx + 1):
+            if _is_completable(idx):
+                return idx
+        return None
 
     def _focus_first_incomplete_run_step(self) -> None:
         if not self._process:
