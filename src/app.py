@@ -957,6 +957,40 @@ class NewFileTypeScreen(ModalScreen):
             self.dismiss(None)
 
 
+class SplashScreen(ModalScreen):
+    """Startup splash with typed welcome text."""
+
+    _MESSAGE = "WELCOME TO VERITRAKK"
+    _FIELD_WIDTH = len(_MESSAGE)
+    _CHAR_DELAY_SECONDS = 0.05
+    _HOLD_SECONDS = 2.0
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._typed_len = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="splash_box"):
+            yield Static("", id="splash_text")
+
+    def on_mount(self) -> None:
+        self.set_timer(self._CHAR_DELAY_SECONDS, self._type_next_char)
+
+    def _type_next_char(self) -> None:
+        if self._typed_len < len(self._MESSAGE):
+            self._typed_len += 1
+            current = self._MESSAGE[: self._typed_len]
+            # Fixed-width right-justified rendering gives a consistent one-column shift per char.
+            self.query_one("#splash_text", Static).update(current.rjust(self._FIELD_WIDTH))
+            self.set_timer(self._CHAR_DELAY_SECONDS, self._type_next_char)
+            return
+        self.set_timer(self._HOLD_SECONDS, self._close_splash)
+
+    def _close_splash(self) -> None:
+        # Use a plain method callback so the timer doesn't try to await dismiss().
+        self.dismiss(None)
+
+
 # ── Main Application ──────────────────────────────────────────────────────────
 
 class VeriTrakkApp(App):
@@ -1082,7 +1116,7 @@ class VeriTrakkApp(App):
         build_tree.auto_expand = False
         build_tree.root.expand()
         self.set_interval(1, self._tick_clock)
-        self._show_home()
+        self.push_screen(SplashScreen(), callback=lambda _: self._show_home())
 
     # ── Mode management ───────────────────────────────────────────────────────
     def _set_mode(self, mode: str) -> None:

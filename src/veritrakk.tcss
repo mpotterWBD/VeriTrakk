@@ -385,10 +385,27 @@ StepScreen,
 ConfirmScreen,
 NewFileTypeScreen,
 RunIDScreen,
+SplashScreen,
 ManualResultScreen,
 RequiredTextScreen,
 CarrotsScreen {
     align: center middle;
+}
+
+#splash_box {
+    background: #181818;
+    border: double darkseagreen;
+    padding: 2 4;
+    width: 52;
+    height: 7;
+    align: center middle;
+}
+
+#splash_text {
+    width: 20;
+    text-align: left;
+    color: lightsalmon;
+    text-style: bold;
 }
 
 #modal_box {
