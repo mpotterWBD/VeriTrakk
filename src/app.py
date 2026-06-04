@@ -26,7 +26,7 @@ from .storage import (
     load_session, save_session,
     sanitize_filename_for,
     generate_log_text, publish_process,
-    is_base_process, create_process_instance,
+    create_process_instance,
 )
 
 # Brand colors as hex (Rich doesn't know Textual CSS color names)
@@ -770,7 +770,7 @@ class RunIDScreen(ModalScreen):
 
 
 class NewFileTypeScreen(ModalScreen):
-    """Choose whether a new file is a process or work quest."""
+    """Choose whether a new file is a reusable template, unique process, or work quest."""
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def on_mount(self) -> None:
@@ -782,7 +782,8 @@ class NewFileTypeScreen(ModalScreen):
             yield Static("New File Type", id="modal_title")
             yield Static("Choose what you want to create.", id="confirm_msg")
             with Horizontal(id="modal_btns"):
-                yield Button("Process (.prcss)", variant="primary", id="btn_proc")
+                yield Button("Process Template", variant="primary", id="btn_template")
+                yield Button("Unique Process", variant="warning", id="btn_unique")
                 yield Button("Work Quest (.wrkqst)", variant="success", id="btn_wrkqst")
                 yield Button("Cancel", variant="default", id="btn_cancel")
 
@@ -790,8 +791,10 @@ class NewFileTypeScreen(ModalScreen):
         self.dismiss(None)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_proc":
-            self.dismiss("process")
+        if event.button.id == "btn_template":
+            self.dismiss("process_template")
+        elif event.button.id == "btn_unique":
+            self.dismiss("process_unique")
         elif event.button.id == "btn_wrkqst":
             self.dismiss("work_quest")
         else:
@@ -838,6 +841,7 @@ class VeriTrakkApp(App):
     _build_dir:         Path    | None = None
     _build_path:        Path    | None = None  # set when editing an existing file
     _build_kind:        str           = "process"
+    _build_spawn_instances: bool      = True
     _pending_thresh_idx: int           = -1
     _syncing_clock_switch: bool        = False
     _return_wq_path:    Path | None    = None
@@ -993,11 +997,16 @@ class VeriTrakkApp(App):
             self._build_path = existing_path
             self._build_dir  = existing_path.parent
             self._build_kind = self._build_proc.kind
+            self._build_spawn_instances = self._build_proc.spawn_instances
         else:
             self._build_path = None
             self._build_dir = None
             default_name = "New Work Quest" if self._build_kind == "work_quest" else "New Process"
-            self._build_proc = Process(name=default_name, kind=self._build_kind)
+            self._build_proc = Process(
+                name=default_name,
+                kind=self._build_kind,
+                spawn_instances=self._build_spawn_instances,
+            )
 
         name_inp = self.query_one("#build_name_inp", Input)
         name_inp.placeholder = (
@@ -1052,6 +1061,13 @@ class VeriTrakkApp(App):
         self.query_one("#btn_shift_up", Button).display = is_process
         self.query_one("#btn_shift_down", Button).display = is_process
         self.query_one("#btn_link_process", Button).display = is_work_quest
+        if self._build_proc and self._build_proc.kind == "process":
+            kind_label = "Template" if self._build_proc.spawn_instances else "Unique"
+            self.query_one("#side_build_title", Static).update(f"Building process ({kind_label}):")
+        elif self._build_proc and self._build_proc.kind == "work_quest":
+            self.query_one("#side_build_title", Static).update("Building work quest:")
+        else:
+            self.query_one("#side_build_title", Static).update("Building process:")
 
     # ── Button handling ───────────────────────────────────────────────────────
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1094,10 +1110,15 @@ class VeriTrakkApp(App):
     def _on_new_file_type(self, kind: str | None) -> None:
         if kind is None:
             return
-        self._build_kind = kind
+        self._build_kind = "work_quest" if kind == "work_quest" else "process"
+        self._build_spawn_instances = kind != "process_unique"
         self._build_path = None
-        default_name = "New Work Quest" if kind == "work_quest" else "New Process"
-        self._build_proc = Process(name=default_name, kind=kind)
+        default_name = "New Work Quest" if self._build_kind == "work_quest" else "New Process"
+        self._build_proc = Process(
+            name=default_name,
+            kind=self._build_kind,
+            spawn_instances=self._build_spawn_instances,
+        )
         self._show_build()
 
     def _pick_build_target(self) -> None:
@@ -1118,8 +1139,13 @@ class VeriTrakkApp(App):
 
     def _load_process(self, file_path: Path) -> None:
         self._clear_work_quest_return_context()
-        # Base .prcss files are reusable templates — prompt for run ID then spawn a fresh instance.
-        if is_base_process(file_path):
+        try:
+            proc = load_process(file_path)
+        except OSError:
+            return
+        self._build_spawn_instances = proc.spawn_instances
+        # Reusable templates prompt for a run ID; unique processes open directly.
+        if proc.kind == "process" and proc.spawn_instances and file_path.suffix == ".prcss" and "#" not in file_path.stem:
             self.push_screen(
                 RunIDScreen(file_path.stem),
                 callback=lambda run_id: self._spawn_instance(file_path, run_id),
@@ -2346,9 +2372,16 @@ class VeriTrakkApp(App):
     def _update_build_file_label(self) -> None:
         label = self.query_one("#build_file_label", Static)
         if self._build_path:
-            label.update(self._build_path.name)
+            label_text = Text(self._build_path.name, style=f"bold {_BLUE}")
         else:
-            label.update("New (unsaved)")
+            label_text = Text("New (unsaved)", style=f"bold {_GOLD}")
+
+        if self._build_proc and self._build_proc.kind == "process":
+            badge = " Template" if self._build_proc.spawn_instances else " Unique"
+            badge_style = f"bold {_GREEN}" if self._build_proc.spawn_instances else f"bold {_PURPLE}"
+            label_text.append(f"{badge}", style=badge_style)
+
+        label.update(label_text)
 
     # ── Log viewer ────────────────────────────────────────────────────────────
     def _view_log(self, file_path: Path) -> None:

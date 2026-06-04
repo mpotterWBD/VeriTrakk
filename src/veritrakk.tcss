@@ -387,7 +387,7 @@ CarrotsScreen {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 78;
+    width: 90;
     height: auto;
     max-height: 90%;
 }
@@ -396,7 +396,7 @@ CarrotsScreen {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 78;
+    width: 90;
     height: auto;
     max-height: 90%;
 }

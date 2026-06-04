@@ -59,6 +59,7 @@ class Step:
 class Process:
     name: str
     kind: str = "process"      # "process" | "work_quest"
+    spawn_instances: bool = True
     steps: list[Step] = field(default_factory=list)
     clocked_in: bool = False
     clock_active_since: str = ""
@@ -184,7 +185,7 @@ class Process:
 # ── CSV I/O ───────────────────────────────────────────────────────────────────
 
 _FIELDS = [
-    "kind", "clocked_in", "clock_active_since", "clock_events",
+    "kind", "spawn_instances", "clocked_in", "clock_active_since", "clock_events",
     "level", "label", "completed", "completed_at",
     "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
     "note", "threshold_upper", "threshold_lower", "result", "linked_process_path",
@@ -198,6 +199,7 @@ def save_process(proc: Process, file_path: Path) -> None:
         w.writeheader()
         w.writerow({
             "kind": proc.kind,
+            "spawn_instances": proc.spawn_instances,
             "clocked_in": proc.clocked_in,
             "clock_active_since": proc.clock_active_since,
             "clock_events": json.dumps(proc.clock_events),
@@ -245,6 +247,8 @@ def _load_csv(file_path: Path) -> Process:
     kind = root.get("kind", "").strip()
     if not kind:
         kind = "work_quest" if file_path.suffix == ".wrkqst" else "process"
+    spawn_instances_raw = root.get("spawn_instances", "true").strip().lower()
+    spawn_instances = spawn_instances_raw not in ("false", "0", "no", "off")
     events_raw = root.get("clock_events", "")
     try:
         clock_events = json.loads(events_raw) if events_raw else []
@@ -254,6 +258,7 @@ def _load_csv(file_path: Path) -> Process:
     proc = Process(
         name=root["label"],
         kind=kind,
+        spawn_instances=spawn_instances,
         clocked_in=root.get("clocked_in", "false").lower() == "true",
         clock_active_since=root.get("clock_active_since", ""),
         clock_events=clock_events if isinstance(clock_events, list) else [],
