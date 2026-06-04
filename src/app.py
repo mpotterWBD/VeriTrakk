@@ -1059,12 +1059,12 @@ class VeriTrakkApp(App):
                         yield Input(placeholder="Process name...", id="build_name_inp")
                         yield Button("+ Task",    id="btn_add_step",    variant="success", classes="build_btn")
                         yield Button("+ Sub Task", id="btn_add_sub",     variant="success", classes="build_btn")
-                        yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
-                        yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
                         yield Button("Delete",     id="btn_del_step",    variant="error",   classes="build_btn")
+                        yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
+                        yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
-                        yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
+                        yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
                     yield Tree("New Process", id="builder_tree")
 
                 # logs viewer
