@@ -102,6 +102,8 @@ def _step_label(
 ) -> Text:
     """Rich Text label for a step node in the run-mode tree."""
     display_label = f"{number_prefix} {step.label}" if number_prefix else step.label
+    if step.main_quest:
+        display_label = f"!!! {display_label} !!!"
     if show_process_badge and step.linked_process_path.strip():
         display_label = f"[P] {display_label}"
     if step.completed:
@@ -180,6 +182,8 @@ def _builder_label(step: Step, *, number_prefix: str = "") -> Text:
         extras.append("[I]")
     if step.linked_process_path:
         extras.append("[L]")
+    if step.main_quest:
+        extras.append("[M]")
     if extras:
         t.append(f"  {'  '.join(extras)}", style=f"dim {_KHAKI}")
     return t
@@ -500,6 +504,7 @@ class StepScreen(ModalScreen):
         existing: Step | None = None,
         title: str = "Add Task",
         allow_thresholds: bool = True,
+        allow_main_quest: bool = False,
         multi_mode: bool = False,
         parent_label: str = "",
     ) -> None:
@@ -507,6 +512,7 @@ class StepScreen(ModalScreen):
         self._ex    = existing
         self._title = title
         self._allow_thresholds = allow_thresholds
+        self._allow_main_quest = allow_main_quest
         self._multi_mode = multi_mode
         self._parent_label = parent_label
         self._items: list[dict[str, str | bool]] = []
@@ -558,6 +564,7 @@ class StepScreen(ModalScreen):
         nominal = self.query_one("#step_nominal", Input).value.strip() if self._allow_thresholds else ""
         tolerance = self.query_one("#step_tolerance", Input).value.strip() if self._allow_thresholds else ""
         note = self.query_one("#step_note", Input).value.strip() if self._allow_thresholds else ""
+        main_quest = self.query_one("#step_main_quest", Switch).value if self._allow_main_quest else False
         manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
         requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
         return {
@@ -567,6 +574,7 @@ class StepScreen(ModalScreen):
             "target_value": nominal,
             "tolerance_pct": tolerance,
             "note": note,
+            "main_quest": main_quest,
             "manual_pass_fail": manual_pf,
             "requires_text_input": requires_text_input,
         }
@@ -579,6 +587,7 @@ class StepScreen(ModalScreen):
             "target_value": "",
             "tolerance_pct": "",
             "note": "",
+            "main_quest": False,
             "manual_pass_fail": False,
             "requires_text_input": False,
         }
@@ -591,6 +600,8 @@ class StepScreen(ModalScreen):
             self.query_one("#step_note", Input).value = payload.get("note", "")
             self.query_one("#step_manual_pf", Switch).value = bool(payload.get("manual_pass_fail", False))
             self.query_one("#step_requires_text", Switch).value = bool(payload.get("requires_text_input", False))
+        if self._allow_main_quest:
+            self.query_one("#step_main_quest", Switch).value = bool(payload.get("main_quest", False))
 
     def _is_draft(self) -> bool:
         return self._idx >= len(self._items)
@@ -631,6 +642,8 @@ class StepScreen(ModalScreen):
                 parts.append("[B]")
             if bool(item.get("requires_text_input", False)):
                 parts.append("[I]")
+            if bool(item.get("main_quest", False)):
+                parts.append("[M]")
             lines.append("  ".join(parts))
         preview.update("\n".join(lines) if lines else "No saved items yet.")
 
@@ -659,6 +672,11 @@ class StepScreen(ModalScreen):
                 value=ex.label if ex else "",
                 placeholder="Task name...", id="step_label",
             )
+            if self._allow_main_quest:
+                yield Label("Main Quest")
+                with Horizontal(id="step_main_quest_row"):
+                    yield Switch(value=ex.main_quest if ex else False, id="step_main_quest")
+                    yield Static("Main Quest", id="step_main_quest_label")
             if self._allow_thresholds:
                 yield Static(
                     "Value is a user defined number that the upper and lower limits are based on. "
@@ -793,6 +811,7 @@ class StepScreen(ModalScreen):
         upper = self.query_one("#step_ut", Input).value.strip() if self._allow_thresholds else ""
         lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
         note = self.query_one("#step_note", Input).value.strip() if self._allow_thresholds else ""
+        main_quest = self.query_one("#step_main_quest", Switch).value if self._allow_main_quest else False
         manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
         requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
         self.dismiss({
@@ -800,6 +819,7 @@ class StepScreen(ModalScreen):
             "threshold_upper": upper,
             "threshold_lower": lower,
             "note": note,
+            "main_quest": main_quest,
             "manual_pass_fail": manual_pf,
             "requires_text_input": requires_text_input,
         })
@@ -1775,6 +1795,14 @@ class VeriTrakkApp(App):
         prog_t.append(f"{_progress_bar(pct)}\n", style=_GREEN)
         prog_t.append(f"{proc.done_top}/{proc.total_top} {item_word}  ", style=_KHAKI)
         prog_t.append(f"{pct:.0f}%", style=_GOLD)
+        if proc.kind == "work_quest":
+            pending_main_quests = sum(
+                1
+                for step in proc.steps
+                if step.level == 1 and step.main_quest and not step.completed
+            )
+            prog_t.append("\nPending Main Quests: ", style=f"bold {_KHAKI}")
+            prog_t.append(str(pending_main_quests), style=f"bold {_GOLD}")
         self.query_one("#run_progress", Static).update(prog_t)
 
     def _extract_instance_unique_id(self, proc_path: Path | None) -> str:
@@ -1845,6 +1873,9 @@ class VeriTrakkApp(App):
         t = Text()
         # Task label
         t.append(display_label + "\n", style=f"bold {_SALMON}")
+        if self._process.kind == "work_quest" and step.main_quest:
+            t.append("MAIN QUEST\n", style=f"bold {_GOLD}")
+            t.append("Priority task for this work quest\n", style="dim")
         # Status
         if step.completed:
             if step.result == "PASS":
@@ -2547,6 +2578,7 @@ class VeriTrakkApp(App):
             StepScreen(
                 title=f"Add Top-Level {item_term}",
                 allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
+                allow_main_quest=self._build_proc is not None and self._build_proc.kind == "work_quest",
                 multi_mode=True,
             ),
             callback=self._on_add_step,
@@ -2573,6 +2605,7 @@ class VeriTrakkApp(App):
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
                 note=str(item.get("note", "")),
+                main_quest=bool(item.get("main_quest", False)),
                 manual_pass_fail=bool(item.get("manual_pass_fail", False)),
                 requires_text_input=bool(item.get("requires_text_input", False)),
             ))
@@ -2593,6 +2626,7 @@ class VeriTrakkApp(App):
             StepScreen(
                 title=f"Add {sub_item_term}",
                 allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
+                allow_main_quest=False,
                 multi_mode=True,
                 parent_label=parent_label,
             ),
@@ -2615,6 +2649,7 @@ class VeriTrakkApp(App):
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
                 note=str(item.get("note", "")),
+                main_quest=False,
                 manual_pass_fail=bool(item.get("manual_pass_fail", False)),
                 requires_text_input=bool(item.get("requires_text_input", False)),
             ))
@@ -2635,6 +2670,7 @@ class VeriTrakkApp(App):
                 existing=step,
                 title=f"Edit {edit_term}",
                 allow_thresholds=self._build_proc.kind == "process",
+                allow_main_quest=self._build_proc.kind == "work_quest" and step.level == 1,
             ),
             callback=lambda d: self._on_edit_step(cur_idx, d),
         )
@@ -2647,6 +2683,7 @@ class VeriTrakkApp(App):
         step.threshold_upper = data["threshold_upper"]
         step.threshold_lower = data["threshold_lower"]
         step.note = str(data.get("note", ""))
+        step.main_quest = bool(data.get("main_quest", False)) if step.level == 1 else False
         step.manual_pass_fail = bool(data.get("manual_pass_fail", False))
         step.requires_text_input = bool(data.get("requires_text_input", False))
         self._rebuild_builder_tree()

@@ -53,6 +53,7 @@ class Step:
     captured_text_input: str = ""
     result: str = ""          # "PASS" | "FAIL" | ""
     linked_process_path: str = ""
+    main_quest: bool = False
 
     def has_threshold(self) -> bool:
         return bool(self.threshold_upper or self.threshold_lower)
@@ -195,7 +196,7 @@ _FIELDS = [
     "kind", "spawn_instances", "clocked_in", "clock_active_since", "clock_events",
     "level", "label", "completed", "completed_at",
     "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
-    "note", "threshold_upper", "threshold_lower", "manual_pass_fail", "requires_text_input", "captured_text_input", "result", "linked_process_path",
+    "note", "threshold_upper", "threshold_lower", "manual_pass_fail", "requires_text_input", "captured_text_input", "result", "linked_process_path", "main_quest",
 ]
 
 
@@ -213,7 +214,7 @@ def save_process(proc: Process, file_path: Path) -> None:
             "level": 0, "label": proc.name,
             "completed": proc.completed, "completed_at": proc.completed_at,
             "started": "", "started_at": "", "paused": "", "active_since": "", "duration_minutes": "", "duration_seconds": "",
-            "note": "", "threshold_upper": "", "threshold_lower": "", "manual_pass_fail": "", "requires_text_input": "", "captured_text_input": "", "result": "", "linked_process_path": "",
+            "note": "", "threshold_upper": "", "threshold_lower": "", "manual_pass_fail": "", "requires_text_input": "", "captured_text_input": "", "result": "", "linked_process_path": "", "main_quest": "",
         })
         for s in proc.steps:
             w.writerow({
@@ -237,6 +238,7 @@ def save_process(proc: Process, file_path: Path) -> None:
                 "captured_text_input": s.captured_text_input,
                 "result": s.result,
                 "linked_process_path": s.linked_process_path,
+                "main_quest": s.main_quest,
             })
 
 
@@ -305,6 +307,7 @@ def _load_csv(file_path: Path) -> Process:
             captured_text_input=row.get("captured_text_input", ""),
             result=row.get("result", ""),
             linked_process_path=row.get("linked_process_path", ""),
+            main_quest=row.get("main_quest", "false").strip().lower() in ("true", "1", "yes", "on"),
         ))
     return proc
 
@@ -375,6 +378,7 @@ def _load_legacy(file_path: Path) -> Process:
             captured_text_input="",
             result=pf.group(1) if pf else "",
             linked_process_path="",
+            main_quest=False,
         ))
     return proc
 
