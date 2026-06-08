@@ -557,6 +557,7 @@ class StepScreen(ModalScreen):
         lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
         nominal = self.query_one("#step_nominal", Input).value.strip() if self._allow_thresholds else ""
         tolerance = self.query_one("#step_tolerance", Input).value.strip() if self._allow_thresholds else ""
+        note = self.query_one("#step_note", Input).value.strip() if self._allow_thresholds else ""
         manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
         requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
         return {
@@ -565,6 +566,7 @@ class StepScreen(ModalScreen):
             "threshold_lower": lower,
             "target_value": nominal,
             "tolerance_pct": tolerance,
+            "note": note,
             "manual_pass_fail": manual_pf,
             "requires_text_input": requires_text_input,
         }
@@ -576,6 +578,7 @@ class StepScreen(ModalScreen):
             "threshold_lower": "",
             "target_value": "",
             "tolerance_pct": "",
+            "note": "",
             "manual_pass_fail": False,
             "requires_text_input": False,
         }
@@ -585,6 +588,7 @@ class StepScreen(ModalScreen):
             self.query_one("#step_tolerance", Input).value = payload.get("tolerance_pct", "")
             self.query_one("#step_ut", Input).value = payload.get("threshold_upper", "")
             self.query_one("#step_lt", Input).value = payload.get("threshold_lower", "")
+            self.query_one("#step_note", Input).value = payload.get("note", "")
             self.query_one("#step_manual_pf", Switch).value = bool(payload.get("manual_pass_fail", False))
             self.query_one("#step_requires_text", Switch).value = bool(payload.get("requires_text_input", False))
 
@@ -683,6 +687,11 @@ class StepScreen(ModalScreen):
                 yield Input(
                     value=ex.threshold_lower if ex else "",
                     placeholder="Min pass value, e.g. 4.7", id="step_lt",
+                )
+                yield Label("Notes  (optional)")
+                yield Input(
+                    value=ex.note if ex else "",
+                    placeholder="Add build-time note...", id="step_note",
                 )
                 yield Label("Boolean  (manual pass/fail)")
                 yield Static(
@@ -783,12 +792,14 @@ class StepScreen(ModalScreen):
             return
         upper = self.query_one("#step_ut", Input).value.strip() if self._allow_thresholds else ""
         lower = self.query_one("#step_lt", Input).value.strip() if self._allow_thresholds else ""
+        note = self.query_one("#step_note", Input).value.strip() if self._allow_thresholds else ""
         manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
         requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
         self.dismiss({
             "label":           label,
             "threshold_upper": upper,
             "threshold_lower": lower,
+            "note": note,
             "manual_pass_fail": manual_pf,
             "requires_text_input": requires_text_input,
         })
@@ -1149,6 +1160,13 @@ class VeriTrakkApp(App):
             callback=lambda path: self._load_process(path) if path else None,
         )
 
+    def _build_picker(self) -> None:
+        start = Path.home()
+        self.push_screen(
+            FilePickerScreen("open", start=start),
+            callback=self._on_build_selected,
+        )
+
     def _logs_picker(self) -> None:
         self.push_screen(
             FilePickerScreen("logs", start=Path.home()),
@@ -1182,6 +1200,7 @@ class VeriTrakkApp(App):
     def _show_build(self, existing_path: Path | None = None) -> None:
         self._set_mode("build")
         if existing_path is not None:
+            existing_path = self._resolve_build_source_path(existing_path)
             try:
                 self._build_proc = load_process(existing_path)
             except Exception:
@@ -1317,7 +1336,32 @@ class VeriTrakkApp(App):
         if self._process and self._proc_path:
             self._show_build(existing_path=self._proc_path)
         else:
-            self._open_picker()
+            self._build_picker()
+
+    def _on_build_selected(self, path: Path | None) -> None:
+        if path is None:
+            return
+        self._show_build(existing_path=path)
+
+    def _resolve_build_source_path(self, path: Path) -> Path:
+        """Prefer editing the original base process when given an instance file path."""
+        if path.suffix != ".prcss" or "#" not in path.stem:
+            return path
+
+        base_name = path.stem.split("#", 1)[0] + path.suffix
+        base_path = path.with_name(base_name)
+        if not base_path.exists():
+            return path
+
+        try:
+            base_proc = load_process(base_path)
+        except Exception:
+            return path
+
+        if base_proc.kind != "process":
+            return path
+
+        return base_path
 
     def _resume(self) -> None:
         sess = load_session()
@@ -2528,6 +2572,7 @@ class VeriTrakkApp(App):
                 label=item["label"], level=1,
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
+                note=str(item.get("note", "")),
                 manual_pass_fail=bool(item.get("manual_pass_fail", False)),
                 requires_text_input=bool(item.get("requires_text_input", False)),
             ))
@@ -2569,6 +2614,7 @@ class VeriTrakkApp(App):
                 label=item["label"], level=step.level + 1,
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
+                note=str(item.get("note", "")),
                 manual_pass_fail=bool(item.get("manual_pass_fail", False)),
                 requires_text_input=bool(item.get("requires_text_input", False)),
             ))
@@ -2600,6 +2646,7 @@ class VeriTrakkApp(App):
         step.label           = data["label"]
         step.threshold_upper = data["threshold_upper"]
         step.threshold_lower = data["threshold_lower"]
+        step.note = str(data.get("note", ""))
         step.manual_pass_fail = bool(data.get("manual_pass_fail", False))
         step.requires_text_input = bool(data.get("requires_text_input", False))
         self._rebuild_builder_tree()
