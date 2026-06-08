@@ -154,8 +154,8 @@ class Process:
         end = self.subtree_end_exclusive(idx)
         return max(idx, end - 1)
 
-    def total_clock_minutes(self) -> int:
-        """Total clocked minutes from IN/OUT events + active clock-in window."""
+    def total_clock_seconds(self) -> int:
+        """Total clocked seconds from IN/OUT events + active clock-in window."""
         total = 0
         active_in: datetime | None = None
 
@@ -171,18 +171,22 @@ class Process:
                 active_in = dt
             elif kind == "OUT" and active_in is not None:
                 delta = dt - active_in
-                total += max(0, int(delta.total_seconds() // 60))
+                total += max(0, int(delta.total_seconds()))
                 active_in = None
 
         if self.clocked_in and self.clock_active_since:
             try:
                 active = datetime.fromisoformat(self.clock_active_since)
                 delta = datetime.now() - active
-                total += max(0, int(delta.total_seconds() // 60))
+                total += max(0, int(delta.total_seconds()))
             except ValueError:
                 pass
 
         return total
+
+    def total_clock_minutes(self) -> int:
+        """Total clocked minutes from IN/OUT events + active clock-in window."""
+        return self.total_clock_seconds() // 60
 
 
 # ── CSV I/O ───────────────────────────────────────────────────────────────────

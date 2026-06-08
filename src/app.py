@@ -1081,7 +1081,7 @@ class VeriTrakkApp(App):
                 # run: process tree
                 with Vertical(id="view_run"):
                     with Horizontal(id="run_clock_strip"):
-                        yield Digits("00:00", id="quest_digit")
+                        yield Digits("00:00:00", id="quest_digit")
                         with Horizontal(id="run_clock_toggle_row"):
                             yield Switch(value=False, id="quest_clock_switch")
                             yield Static("CLOCKED OUT", id="quest_clock_state")
@@ -1557,7 +1557,7 @@ class VeriTrakkApp(App):
             return
 
         strip.display = True
-        digit.update(self._format_minutes(self._process.total_clock_minutes()))
+        digit.update(self._format_seconds(self._process.total_clock_seconds()))
 
         self._syncing_clock_switch = True
         switch.value = self._process.clocked_in
@@ -1764,6 +1764,27 @@ class VeriTrakkApp(App):
         else:
             bar.update("")
 
+    def _format_notes_for_sidebar(self, raw_notes: str) -> str:
+        formatted_blocks: list[str] = []
+        for raw in raw_notes.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            match = re.match(r"^\[(.*?)\]\s*(.*)$", line)
+            if match:
+                ts = match.group(1).strip()
+                text = match.group(2).strip()
+                if text:
+                    formatted_blocks.append(f"[{ts}]\n{text}")
+                else:
+                    formatted_blocks.append(f"[{ts}]")
+                continue
+            formatted_blocks.append(line)
+
+        if formatted_blocks:
+            return "\n\n".join(formatted_blocks)
+        return raw_notes.strip()
+
     def _update_step_info(self) -> None:
         tree = self.query_one("#process_tree", Tree)
         info = self.query_one("#run_step_info", Static)
@@ -1819,7 +1840,7 @@ class VeriTrakkApp(App):
         # Note
         if step.note:
             t.append("\nNotes\n", style="dim")
-            t.append(step.note, style=_KHAKI)
+            t.append(self._format_notes_for_sidebar(step.note), style=_KHAKI)
         # Work quest parent nodes can summarize notes from child tasks.
         if self._process.kind == "work_quest" and self._process.has_children(step_idx):
             child_notes: list[tuple[str, str]] = []
@@ -1835,7 +1856,7 @@ class VeriTrakkApp(App):
                 t.append("\nChild Task Notes\n", style="dim")
                 for i, (child_label, child_note) in enumerate(child_notes):
                     t.append(f"[{child_label}]\n", style=f"bold {_BLUE}")
-                    t.append(child_note, style=_KHAKI)
+                    t.append(self._format_notes_for_sidebar(child_note), style=_KHAKI)
                     if i < len(child_notes) - 1:
                         t.append("\n\n", style="dim")
         # Threshold

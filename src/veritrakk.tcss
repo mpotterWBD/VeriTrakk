@@ -223,16 +223,16 @@ MarkdownFence {
 }
 
 #quest_digit {
-    width: 22;
-    min-width: 22;
+    width: 30;
+    min-width: 30;
     color: #7fd4d8;
 }
 
 #run_clock_toggle_row {
     height: 3;
     align: left middle;
-    width: 22;
-    min-width: 22;
+    width: 24;
+    min-width: 24;
     margin-left: 2;
 }
 
