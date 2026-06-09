@@ -659,82 +659,83 @@ class StepScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         ex = self._ex
         with Vertical(id="modal_box"):
-            yield Static(self._title, id="modal_title")
-            if self._parent_label:
-                yield Label("Adding under")
-                yield Static(self._parent_label, id="step_parent")
-            if self._multi_mode:
-                yield Label("Added Items")
-                yield Static("", id="step_existing")
-                yield Static("", id="step_meta")
-            yield Label("Label")
-            yield Input(
-                value=ex.label if ex else "",
-                placeholder="Task name...", id="step_label",
-            )
-            if self._allow_main_quest:
-                yield Label("Main Quest")
-                with Horizontal(id="step_main_quest_row"):
-                    yield Switch(value=ex.main_quest if ex else False, id="step_main_quest")
-                    yield Static("Main Quest", id="step_main_quest_label")
-            if self._allow_thresholds:
-                yield Static(
-                    "Value is a user defined number that the upper and lower limits are based on. "
-                    "Tolerance represents the percentage above and below the target value.",
-                    id="step_thresh_help",
+            with VerticalScroll(id="step_modal_scroll"):
+                yield Static(self._title, id="modal_title")
+                if self._parent_label:
+                    yield Label("Adding under")
+                    yield Static(self._parent_label, id="step_parent")
+                if self._multi_mode:
+                    yield Label("Added Items")
+                    yield Static("", id="step_existing")
+                    yield Static("", id="step_meta")
+                yield Label("Label")
+                yield Input(
+                    value=ex.label if ex else "",
+                    placeholder="Task name...", id="step_label",
                 )
-                yield Label("Target Value +/- Tolerance")
-                with Horizontal(id="step_tol_row"):
-                    yield Input(
-                        placeholder="Value, e.g. 3.3", id="step_nominal",
+                if self._allow_main_quest:
+                    yield Label("Main Quest")
+                    with Horizontal(id="step_main_quest_row"):
+                        yield Switch(value=ex.main_quest if ex else False, id="step_main_quest")
+                        yield Static("Main Quest", id="step_main_quest_label")
+                if self._allow_thresholds:
+                    yield Static(
+                        "Value is a user defined number that the upper and lower limits are based on. "
+                        "Tolerance represents the percentage above and below the target value.",
+                        id="step_thresh_help",
                     )
-                    yield Static("", id="step_tol_divider")
-                    yield Input(
-                        placeholder="Tolerance, e.g. 5%", id="step_tolerance",
+                    yield Label("Target Value +/- Tolerance")
+                    with Horizontal(id="step_tol_row"):
+                        yield Input(
+                            placeholder="Value, e.g. 3.3", id="step_nominal",
+                        )
+                        yield Static("", id="step_tol_divider")
+                        yield Input(
+                            placeholder="Tolerance, e.g. 5%", id="step_tolerance",
+                        )
+                    yield Static(
+                        "User defined Max and Min values.",
+                        id="step_thresh_hint",
                     )
-                yield Static(
-                    "User defined Max and Min values.",
-                    id="step_thresh_hint",
-                )
-                yield Label("Upper Limit  (optional)")
-                yield Input(
-                    value=ex.threshold_upper if ex else "",
-                    placeholder="Max pass value, e.g. 5.3", id="step_ut",
-                )
-                yield Label("Lower Limit  (optional)")
-                yield Input(
-                    value=ex.threshold_lower if ex else "",
-                    placeholder="Min pass value, e.g. 4.7", id="step_lt",
-                )
-                yield Label("Notes  (optional)")
-                yield Input(
-                    value=ex.note if ex else "",
-                    placeholder="Add build-time note...", id="step_note",
-                )
-                yield Label("Boolean  (manual pass/fail)")
-                yield Static(
-                    "When enabled, the operator decides PASS or FAIL.",
-                    id="step_boolean_desc",
-                )
-                with Horizontal(id="step_boolean_row"):
-                    yield Switch(value=ex.manual_pass_fail if ex else False, id="step_manual_pf")
-                    yield Static("Pass/Fail", id="step_boolean_label")
-                yield Label("Input Required")
-                yield Static(
-                    "When enabled, operator must enter text (e.g., serial number) during run.",
-                    id="step_input_desc",
-                )
-                with Horizontal(id="step_input_row"):
-                    yield Switch(value=ex.requires_text_input if ex else False, id="step_requires_text")
-                    yield Static("Text Input", id="step_input_label")
-            if self._multi_mode:
-                with Horizontal(id="note_nav_btns"):
-                    yield Button("Up",      variant="default", id="btn_prev")
-                    yield Button("Down",    variant="success", id="btn_next")
-                    yield Button("Delete",  variant="error",   id="btn_delete")
-            with Horizontal(id="modal_btns"):
-                yield Button("Save",   variant="primary", id="btn_save")
-                yield Button("Cancel",                   id="btn_cancel")
+                    yield Label("Upper Limit  (optional)")
+                    yield Input(
+                        value=ex.threshold_upper if ex else "",
+                        placeholder="Max pass value, e.g. 5.3", id="step_ut",
+                    )
+                    yield Label("Lower Limit  (optional)")
+                    yield Input(
+                        value=ex.threshold_lower if ex else "",
+                        placeholder="Min pass value, e.g. 4.7", id="step_lt",
+                    )
+                    yield Label("Notes  (optional)")
+                    yield Input(
+                        value=ex.note if ex else "",
+                        placeholder="Add build-time note...", id="step_note",
+                    )
+                    yield Label("Boolean  (manual pass/fail)")
+                    yield Static(
+                        "When enabled, the operator decides PASS or FAIL.",
+                        id="step_boolean_desc",
+                    )
+                    with Horizontal(id="step_boolean_row"):
+                        yield Switch(value=ex.manual_pass_fail if ex else False, id="step_manual_pf")
+                        yield Static("Pass/Fail", id="step_boolean_label")
+                    yield Label("Input Required")
+                    yield Static(
+                        "When enabled, operator must enter text (e.g., serial number) during run.",
+                        id="step_input_desc",
+                    )
+                    with Horizontal(id="step_input_row"):
+                        yield Switch(value=ex.requires_text_input if ex else False, id="step_requires_text")
+                        yield Static("Text Input", id="step_input_label")
+                if self._multi_mode:
+                    with Horizontal(id="note_nav_btns"):
+                        yield Button("Up",      variant="default", id="btn_prev")
+                        yield Button("Down",    variant="success", id="btn_next")
+                        yield Button("Delete",  variant="error",   id="btn_delete")
+                with Horizontal(id="modal_btns"):
+                    yield Button("Save",   variant="primary", id="btn_save")
+                    yield Button("Cancel",                   id="btn_cancel")
 
     def on_mount(self) -> None:
         if self._multi_mode:
@@ -1049,6 +1050,7 @@ class VeriTrakkApp(App):
         Binding("ctrl+s", "save_build",    "Save",        show=False),
         Binding("r",      "run_linked_process", "Run Process", show=True),
         Binding("b",      "back_to_work_quest", "Back To Work Quest", show=True),
+        Binding("x",      "close_active", "Close Active", show=True),
         # Global
         Binding("escape", "go_back", "Back", show=True),
         Binding("q",      "quit",    "Quit", show=True),
@@ -1136,6 +1138,9 @@ class VeriTrakkApp(App):
                 with Vertical(id="view_logs"):
                     yield Log(id="log_output", auto_scroll=False)
 
+        with Horizontal(id="close_bar"):
+            yield Static("", id="close_action_text")
+
         yield Footer()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -1172,6 +1177,7 @@ class VeriTrakkApp(App):
         self._switch("side_home", "view_home")
         self.query_one("#status_bar", Static).update("")
         self._refresh_quest_clock_widgets()
+        self._refresh_close_action_bar()
 
     def _open_picker(self) -> None:
         start = Path.home()
@@ -1215,6 +1221,7 @@ class VeriTrakkApp(App):
         self._refresh_run_sidebar()
         self._refresh_quest_clock_widgets()
         self._refresh_status()
+        self._refresh_close_action_bar()
         self.query_one("#process_tree", Tree).focus()
 
     def _show_build(self, existing_path: Path | None = None) -> None:
@@ -1250,6 +1257,7 @@ class VeriTrakkApp(App):
         self._switch("side_build", "view_build")
         self._refresh_quest_clock_widgets()
         self._refresh_status()
+        self._refresh_close_action_bar()
         self.query_one("#build_name_inp", Input).focus()
 
     def _build_terms(self) -> tuple[str, str]:
@@ -1388,10 +1396,29 @@ class VeriTrakkApp(App):
         if not sess:
             return
         directory, file_name = sess
+        if not file_name.strip():
+            return
         path = directory / file_name
-        if not path.exists():
+        if not path.exists() or not path.is_file():
             return
         self._load_process(path)
+
+    def _refresh_close_action_bar(self) -> None:
+        bar = self.query_one("#close_action_text", Static)
+        if self._process is None:
+            bar.update("No active process or work quest")
+            return
+        target = "Work Quest" if self._process.kind == "work_quest" else "Process"
+        bar.update(f"[X] Close {target}")
+
+    def action_close_active(self) -> None:
+        if self._process is None:
+            return
+        self._process = None
+        self._proc_path = None
+        self._clear_work_quest_return_context()
+        save_session(Path.home(), "")
+        self._show_home()
 
     def _load_process(self, file_path: Path) -> None:
         self._clear_work_quest_return_context()
@@ -1835,6 +1862,7 @@ class VeriTrakkApp(App):
             bar.update(t)
         else:
             bar.update("")
+        self._refresh_close_action_bar()
 
     def _format_notes_for_sidebar(self, raw_notes: str) -> str:
         formatted_blocks: list[str] = []
@@ -2852,6 +2880,8 @@ class VeriTrakkApp(App):
 
     # ── Binding guards ────────────────────────────────────────────────────────
     def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "close_active":
+            return self._process is not None
         if action in ("complete_step", "uncomplete_step", "note_step", "pause_step"):
             return self._mode == "run"
         if action == "toggle_clock":

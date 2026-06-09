@@ -21,6 +21,20 @@ Footer {
     height: 1;
 }
 
+#close_bar {
+    height: 1;
+    padding: 0 1;
+    background: #111;
+    border-top: solid #2a2a2a;
+    align: center middle;
+}
+
+#close_action_text {
+    color: darkkhaki;
+    text-style: bold;
+    content-align: center middle;
+}
+
 /* ── Toolbar ────────────────────────────────────────────── */
 #toolbar {
     height: auto;
@@ -415,6 +429,15 @@ CarrotsScreen {
     width: 90;
     height: auto;
     max-height: 90%;
+}
+
+StepScreen #modal_box {
+    height: 90%;
+}
+
+#step_modal_scroll {
+    height: 1fr;
+    overflow-y: auto;
 }
 
 #new_file_type_box {
