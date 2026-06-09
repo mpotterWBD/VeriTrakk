@@ -5,6 +5,7 @@ toolbar-driven navigation, and CSV-backed data model.
 """
 from __future__ import annotations
 
+import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,27 @@ _KHAKI   = "#bdb76b"  # darkkhaki
 _TEAL    = "#5f9ea0"  # cadetblue
 _BLUE    = "#1e90ff"  # dodgerblue
 _PURPLE  = "#9370db"  # mediumpurple
+
+
+# ── Home matrix rain knobs ───────────────────────────────────────────────────
+# Pick exactly 3 characters for the standard random rain.
+MATRIX_RAIN_RANDOM_CHARS = "01#"
+# Words that occasionally fall vertically in the rain.
+MATRIX_RAIN_SNEAKY_WORDS = ["VERITRAKK", "WESTBOUND", "QUALITY", "DESIGNS"]
+# Density knob (0.0-1.0): higher values create more falling characters.
+MATRIX_RAIN_DENSITY = 0.24
+MATRIX_RAIN_CHAR_SPAWN_CHANCE = 0.55
+MATRIX_RAIN_SNEAKY_WORD_CHANCE = 0.06
+# Max number of matrix columns. Set to 0 to auto-fit full panel width.
+MATRIX_RAIN_WIDTH = 0
+MATRIX_RAIN_TOP_ROWS = 10
+MATRIX_RAIN_BOTTOM_ROWS = 10
+MATRIX_RAIN_TICK_SECONDS = 0.01
+MATRIX_RAIN_COLOR = "#1e90ff"
+MATRIX_RAIN_SNEAKY_WORD_COLOR = "#ffa07a"
+MATRIX_RAIN_COLUMN_MIN_INTERVAL_TICKS = 1
+MATRIX_RAIN_COLUMN_MAX_INTERVAL_TICKS = 6
+MATRIX_RAIN_COLUMN_CHAR_CHANGE_CYCLES = 3
 
 
 # ── Welcome content ───────────────────────────────────────────────────────────
@@ -1036,7 +1058,7 @@ class VeriTrakkApp(App):
         # Run-mode task actions
         Binding("right", "complete_step",   "Complete",  show=False, priority=True),
         Binding("left",  "uncomplete_step", "Un-do",     show=False, priority=True),
-        Binding("n",     "note_step",       "Note",      show=True),
+        Binding("n",     "note_step",       "Note",      show=True, priority=True),
         Binding("p",     "pause_step",      "Pause",     show=True),
         Binding("c",     "toggle_clock",    "Clock In/Out", show=True),
         # Build-mode actions
@@ -1071,6 +1093,10 @@ class VeriTrakkApp(App):
     _syncing_clock_switch: bool        = False
     _return_wq_path:    Path | None    = None
     _return_wq_step_idx: int | None    = None
+    _matrix_top_columns: list[dict[str, int]] = []
+    _matrix_bottom_columns: list[dict[str, int]] = []
+    _matrix_top_words: list[dict[str, int | str]] = []
+    _matrix_bottom_words: list[dict[str, int | str]] = []
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
@@ -1089,10 +1115,12 @@ class VeriTrakkApp(App):
             with ContentSwitcher(id="sidebar", initial="side_home"):
                 # home
                 with Vertical(id="side_home"):
+                    yield Static("", id="matrix_top")
                     yield Static(
                         " VeriTrakk\n Process Tracking\n Westbound Designs",
                         id="logo",
                     )
+                    yield Static("", id="matrix_bottom")
 
                 # run
                 with Vertical(id="side_run"):
@@ -1151,8 +1179,172 @@ class VeriTrakkApp(App):
         build_tree = self.query_one("#builder_tree", Tree)
         build_tree.auto_expand = False
         build_tree.root.expand()
+        matrix_top = self.query_one("#matrix_top", Static)
+        matrix_bottom = self.query_one("#matrix_bottom", Static)
+        matrix_top.styles.color = MATRIX_RAIN_COLOR
+        matrix_bottom.styles.color = MATRIX_RAIN_COLOR
         self.set_interval(1, self._tick_clock)
+        self.set_interval(MATRIX_RAIN_TICK_SECONDS, self._tick_matrix_rain)
+        self._tick_matrix_rain()
         self.push_screen(SplashScreen(), callback=lambda _: self._show_home())
+
+    def _tick_matrix_rain(self) -> None:
+        top = self.query_one("#matrix_top", Static)
+        bottom = self.query_one("#matrix_bottom", Static)
+
+        panel_top_width = max(8, top.size.width - 2)
+        panel_bottom_width = max(8, bottom.size.width - 2)
+        panel_shared_width = min(panel_top_width, panel_bottom_width)
+
+        if MATRIX_RAIN_WIDTH <= 0:
+            matrix_width = panel_shared_width
+        else:
+            matrix_width = max(1, min(panel_shared_width, MATRIX_RAIN_WIDTH))
+
+        top_rows = max(MATRIX_RAIN_TOP_ROWS, max(1, top.size.height - 2))
+        bottom_rows = max(MATRIX_RAIN_BOTTOM_ROWS, max(1, bottom.size.height - 2))
+
+        total_rows = top_rows + bottom_rows
+        grid, sneaky_cells = self._render_matrix_region(
+            self._matrix_top_columns,
+            self._matrix_top_words,
+            total_rows,
+            matrix_width,
+        )
+        top.update(self._render_matrix_slice(grid, sneaky_cells, 0, top_rows))
+        bottom.update(self._render_matrix_slice(grid, sneaky_cells, top_rows, total_rows))
+
+    def _render_matrix_region(
+        self,
+        columns: list[dict[str, int]],
+        words: list[dict[str, int | str]],
+        rows: int,
+        width: int,
+    ) -> tuple[list[list[str]], set[tuple[int, int]]]:
+        width = max(1, width)
+        chars = (MATRIX_RAIN_RANDOM_CHARS[:3] or "01#")[:3]
+
+        density = max(0.0, min(1.0, MATRIX_RAIN_DENSITY))
+        min_interval = max(1, MATRIX_RAIN_COLUMN_MIN_INTERVAL_TICKS)
+        max_interval = max(min_interval, MATRIX_RAIN_COLUMN_MAX_INTERVAL_TICKS)
+        change_cycles = max(1, MATRIX_RAIN_COLUMN_CHAR_CHANGE_CYCLES)
+
+        # Higher density means faster per-column growth (shorter update intervals).
+        effective_max_interval = max(
+            min_interval,
+            int(round(max_interval - (max_interval - min_interval) * density)),
+        )
+
+        while len(columns) < width:
+            interval = random.randint(min_interval, effective_max_interval)
+            columns.append(
+                {
+                    "height": 0,
+                    "interval": interval,
+                    "next_tick": random.randint(0, interval),
+                    "char_idx": random.randrange(len(chars)),
+                    "cycles": 0,
+                }
+            )
+        if len(columns) > width:
+            del columns[width:]
+
+        advanced_columns: set[int] = set()
+        for col_idx, col in enumerate(columns):
+            next_tick = int(col.get("next_tick", 0))
+            if next_tick > 0:
+                col["next_tick"] = next_tick - 1
+                continue
+
+            advanced_columns.add(col_idx)
+            height = int(col.get("height", 0))
+            if height < rows:
+                col["height"] = height + 1
+            else:
+                col["height"] = 0
+                cycles = int(col.get("cycles", 0)) + 1
+                if cycles >= change_cycles:
+                    cycles = 0
+                    current_idx = int(col.get("char_idx", 0)) % len(chars)
+                    col["char_idx"] = (current_idx + 1) % len(chars)
+                col["cycles"] = cycles
+
+            interval = random.randint(min_interval, effective_max_interval)
+            col["interval"] = interval
+            col["next_tick"] = interval
+
+        if MATRIX_RAIN_SNEAKY_WORDS and random.random() < MATRIX_RAIN_SNEAKY_WORD_CHANCE:
+            word = random.choice([w for w in MATRIX_RAIN_SNEAKY_WORDS if w.strip()]).upper()
+            if word:
+                words.append(
+                    {
+                        "col": random.randrange(width),
+                        "top": -len(word),
+                        "word": word,
+                    }
+                )
+
+        next_words: list[dict[str, int | str]] = []
+        for word_drop in words:
+            col = int(word_drop.get("col", -1))
+            top_row = int(word_drop.get("top", -1))
+            if col in advanced_columns:
+                top_row += 1
+            word = str(word_drop.get("word", ""))
+            if top_row < rows:
+                word_drop["top"] = top_row
+                next_words.append(word_drop)
+        words[:] = next_words
+
+        grid = [[" " for _ in range(width)] for _ in range(max(1, rows))]
+
+        for col_idx, col in enumerate(columns):
+            height = int(col.get("height", 0))
+            char_idx = int(col.get("char_idx", 0)) % len(chars)
+            char = chars[char_idx]
+            for row in range(max(0, min(rows, height))):
+                grid[row][col_idx] = char
+
+        sneaky_cells: set[tuple[int, int]] = set()
+        for word_drop in words:
+            col = int(word_drop.get("col", 0))
+            top_row = int(word_drop.get("top", 0))
+            word = str(word_drop.get("word", ""))
+            if not word or col < 0 or col >= width:
+                continue
+            for idx, ch in enumerate(word):
+                row = top_row + idx
+                if 0 <= row < rows:
+                    grid[row][col] = ch
+                    sneaky_cells.add((row, col))
+        return grid, sneaky_cells
+
+    def _render_matrix_slice(
+        self,
+        grid: list[list[str]],
+        sneaky_cells: set[tuple[int, int]],
+        start_row: int,
+        end_row: int,
+    ) -> Text:
+        rendered = Text()
+        sneaky_style = f"bold {MATRIX_RAIN_SNEAKY_WORD_COLOR}"
+
+        start = max(0, start_row)
+        end = min(len(grid), max(start, end_row))
+        row_indices = list(range(start, end))
+        if not row_indices:
+            return rendered
+
+        for idx, row_idx in enumerate(row_indices):
+            line = grid[row_idx]
+            for col_idx, ch in enumerate(line):
+                if (row_idx, col_idx) in sneaky_cells:
+                    rendered.append(ch, style=sneaky_style)
+                else:
+                    rendered.append(ch)
+            if idx < len(row_indices) - 1:
+                rendered.append("\n")
+        return rendered
 
     # ── Mode management ───────────────────────────────────────────────────────
     def _set_mode(self, mode: str) -> None:
@@ -2438,11 +2630,41 @@ class VeriTrakkApp(App):
         if notes_text is None:
             return
         step = self._process.steps[step_idx]
-        step.note = notes_text
+        step.note = self._merged_instance_note_text(step_idx, notes_text)
 
         save_process(self._process, self._proc_path)
         self._rebuild_proc_tree()
         self._update_step_info()
+
+    def _merged_instance_note_text(self, step_idx: int, notes_text: str) -> str:
+        """Preserve template notes and append instance-only notes for spawned runs."""
+        if not self._proc_path or self._proc_path.suffix != ".prcss" or "#" not in self._proc_path.stem:
+            return notes_text
+
+        base_name = self._proc_path.stem.split("#", 1)[0] + self._proc_path.suffix
+        base_path = self._proc_path.with_name(base_name)
+        if not base_path.exists():
+            return notes_text
+
+        try:
+            base_proc = load_process(base_path)
+        except OSError:
+            return notes_text
+
+        if base_proc.kind != "process" or not base_proc.spawn_instances:
+            return notes_text
+        if step_idx < 0 or step_idx >= len(base_proc.steps):
+            return notes_text
+
+        base_note = base_proc.steps[step_idx].note.strip()
+        if not base_note:
+            return notes_text
+
+        base_lines = [line for line in base_note.splitlines() if line.strip()]
+        entered_lines = [line for line in notes_text.splitlines() if line.strip()]
+        instance_only_lines = [line for line in entered_lines if line not in base_lines]
+        merged_lines = base_lines + instance_only_lines
+        return "\n".join(merged_lines)
 
     def _move_run_cursor_to(self, target_idx: int) -> None:
         self.call_after_refresh(self._do_move_run_cursor, target_idx)

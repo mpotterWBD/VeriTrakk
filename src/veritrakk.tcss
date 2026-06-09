@@ -5,14 +5,15 @@
 
 /* ── Global ─────────────────────────────────────────────── */
 Screen {
-    background: #0d0d0d;
+    background: #0b0d0f;
 }
 
 Header {
-    background: #1a1a1a;
+    background: #15181b;
     color: lightsalmon;
     text-style: bold;
     height: 1;
+    border-bottom: solid #2a2f33;
 }
 
 Footer {
@@ -38,9 +39,9 @@ Footer {
 /* ── Toolbar ────────────────────────────────────────────── */
 #toolbar {
     height: auto;
-    padding: 0 1;
-    background: #111;
-    border-bottom: solid #5f5f5f;
+    padding: 0 2;
+    background: #101417;
+    border-bottom: solid #2f3a35;
     align: left middle;
 }
 
@@ -55,18 +56,18 @@ Footer {
 .toolbar_btn {
     margin: 0 1 0 0;
     min-width: 10;
-    background: #1e1e1e;
+    background: #1a2124;
     border: none;
-    color: #666;
+    color: #93a3ad;
 }
 
 .toolbar_btn:hover {
-    background: #2a2a2a;
-    color: darkkhaki;
+    background: #243035;
+    color: #d2d8a8;
 }
 
 .toolbar_btn:focus {
-    background: #2a2a2a;
+    background: #243035;
     color: goldenrod;
     border: none;
     text-style: bold;
@@ -75,7 +76,7 @@ Footer {
 .toolbar_btn.active_mode {
     color: lightsalmon;
     text-style: bold;
-    background: #1e1010;
+    background: #2a1917;
 }
 
 #status_bar {
@@ -88,14 +89,15 @@ Footer {
 /* ── Main split ─────────────────────────────────────────── */
 #main {
     height: 1fr;
+    background: #0b0f12;
 }
 
 /* ── Sidebar ────────────────────────────────────────────── */
 #sidebar {
     width: 30%;
     height: 1fr;
-    background: #0f0f0f;
-    border-right: solid #5f5f5f;
+    background: #0f1316;
+    border-right: solid #2f3a35;
 }
 
 #sidebar.clocked_in {
@@ -108,18 +110,32 @@ Footer {
 
 /* home */
 #side_home {
-    padding: 2 1 1 1;
+    padding: 2 2 1 2;
     height: 1fr;
-    align: center top;
+    align: center middle;
+}
+
+#matrix_top,
+#matrix_bottom {
+    width: 100%;
+    height: 1fr;
+    background: #10161a;
+    border: round #25383f;
+    color: #3d9b68;
+    content-align: left top;
+    text-style: bold;
+    padding: 0 1;
 }
 
 #logo {
     color: lightsalmon;
     text-style: bold;
     text-align: center;
-    content-align: center top;
+    content-align: center middle;
     width: 100%;
-    padding-bottom: 1;
+    padding: 2 2;
+    border: round #2f3a35;
+    background: #131a1f;
 }
 
 /* run */
@@ -173,17 +189,25 @@ Footer {
 #content {
     width: 1fr;
     height: 1fr;
-    background: #0d0d0d;
+    background: #0c1013;
 }
 
 /* home */
 #view_home {
-    padding: 1 3;
+    padding: 2 3;
+}
+
+#home_md {
+    width: 100%;
+    height: auto;
+    padding: 1 2;
+    border: round #2f3a35;
+    background: #12191d;
 }
 
 Markdown {
     background: transparent;
-    color: darkkhaki;
+    color: #c9c08b;
 }
 
 MarkdownH1 {
@@ -193,24 +217,24 @@ MarkdownH1 {
 }
 
 MarkdownH2 {
-    color: darkseagreen;
+    color: #93c4a2;
     text-style: bold;
     background: transparent;
 }
 
 MarkdownH3 {
-    color: cadetblue;
+    color: #6ca4b0;
     background: transparent;
 }
 
 MarkdownCode {
-    color: goldenrod;
+    color: #d8b768;
     background: transparent;
 }
 
 MarkdownFence {
-    background: #111;
-    color: darkkhaki;
+    background: #0f1417;
+    color: #c9c08b;
 }
 
 /* open hint — removed (now a dialog) */
