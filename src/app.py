@@ -1189,6 +1189,8 @@ class VeriTrakkApp(App):
         self.push_screen(SplashScreen(), callback=lambda _: self._show_home())
 
     def _tick_matrix_rain(self) -> None:
+        if self._mode != "home":
+            return
         top = self.query_one("#matrix_top", Static)
         bottom = self.query_one("#matrix_bottom", Static)
 
@@ -1671,11 +1673,71 @@ class VeriTrakkApp(App):
     def _tick_clock(self) -> None:
         if self._mode != "run" or not self._process:
             return
+        has_live_step_timer = self._has_live_step_timer()
         if self._is_work_quest_active():
             self._refresh_quest_clock_widgets()
-        self._refresh_proc_tree_live()
+        if has_live_step_timer:
+            self._refresh_proc_tree_live()
         self._refresh_status()
-        self._update_step_info()
+        if has_live_step_timer:
+            self._update_step_info()
+
+    def _has_live_step_timer(self) -> bool:
+        if not self._process or self._process.kind != "work_quest":
+            return False
+        for idx, step in enumerate(self._process.steps):
+            if self._process.has_children(idx):
+                continue
+            if step.started and not step.completed and not step.paused and bool(step.active_since):
+                return True
+        return False
+
+    def _compute_run_tree_metrics(
+        self,
+        now: datetime,
+    ) -> tuple[dict[int, list[int]], dict[int, tuple[int, int]], dict[int, int]]:
+        """Build immediate-children map, child completion stats, and live seconds in O(n)."""
+        proc = self._process
+        if not proc:
+            return {}, {}, {}
+
+        total_steps = len(proc.steps)
+        children_map: dict[int, list[int]] = {i: [] for i in range(total_steps)}
+
+        stack: list[int] = []
+        for idx, step in enumerate(proc.steps):
+            while stack and proc.steps[stack[-1]].level >= step.level:
+                stack.pop()
+            if stack:
+                children_map[stack[-1]].append(idx)
+            stack.append(idx)
+
+        live_seconds: dict[int, int] = {}
+        for idx, step in enumerate(proc.steps):
+            total = max(0, step.duration_seconds)
+            if (
+                proc.kind == "work_quest"
+                and step.started
+                and not step.completed
+                and not step.paused
+                and step.active_since
+            ):
+                total += self._work_quest_seconds_between(proc, step.active_since, now)
+            live_seconds[idx] = max(0, total)
+
+        for idx in range(total_steps - 1, -1, -1):
+            children = children_map[idx]
+            if children:
+                live_seconds[idx] = max(0, sum(live_seconds[child_idx] for child_idx in children))
+
+        child_stats: dict[int, tuple[int, int]] = {}
+        for idx, children in children_map.items():
+            if not children:
+                continue
+            done = sum(1 for child_idx in children if proc.steps[child_idx].completed)
+            child_stats[idx] = (done, len(children))
+
+        return children_map, child_stats, live_seconds
 
     def _format_minutes(self, minutes: int) -> str:
         h = max(0, minutes // 60)
@@ -1901,6 +1963,8 @@ class VeriTrakkApp(App):
             return
         proc = self._process
         tree = self.query_one("#process_tree", Tree)
+        now = datetime.now()
+        children_map, child_stats, live_seconds = self._compute_run_tree_metrics(now)
 
         # Remember collapsed nodes so we can restore expand/collapse state.
         collapsed: set[int] = set()
@@ -1920,7 +1984,6 @@ class VeriTrakkApp(App):
         tree.reset(root_label)
         tree.root.data = None
 
-        now = datetime.now()
         stack: list[tuple[int, object]] = [(0, tree.root)]
         for idx, step in enumerate(proc.steps):
             while stack and stack[-1][0] >= step.level:
@@ -1928,9 +1991,9 @@ class VeriTrakkApp(App):
             parent_node = stack[-1][1] if stack else tree.root
             number_prefix = self._step_number(proc, idx) if proc.kind == "process" else ""
 
-            children = proc.children_of(idx)
-            sub_done = sum(1 for _, child in children if child.completed)
-            sub_total = len(children)
+            children = children_map.get(idx, [])
+            sub_done, sub_total = child_stats.get(idx, (0, 0))
+            live_seconds_for_step = live_seconds.get(idx, max(0, step.duration_seconds))
 
             if children:
                 node = parent_node.add(
@@ -1940,7 +2003,7 @@ class VeriTrakkApp(App):
                         show_process_badge=proc.kind == "work_quest",
                         sub_done=sub_done,
                         sub_total=sub_total,
-                        live_seconds=self._live_step_seconds(idx, now),
+                        live_seconds=live_seconds_for_step,
                     ),
                     data=idx,
                     expand=idx not in collapsed,
@@ -1952,7 +2015,7 @@ class VeriTrakkApp(App):
                         step,
                         number_prefix=number_prefix,
                         show_process_badge=proc.kind == "work_quest",
-                        live_seconds=self._live_step_seconds(idx, now),
+                        live_seconds=live_seconds_for_step,
                     ),
                     data=idx,
                 )
@@ -1965,15 +2028,15 @@ class VeriTrakkApp(App):
         tree = self.query_one("#process_tree", Tree)
         proc = self._process
         now = datetime.now()
+        children_map, child_stats, live_seconds = self._compute_run_tree_metrics(now)
 
         def _walk(node) -> None:
             if node.data is not None:
                 idx = node.data
                 step = proc.steps[idx]
                 number_prefix = self._step_number(proc, idx) if proc.kind == "process" else ""
-                children = proc.children_of(idx)
-                sub_done = sum(1 for _, child in children if child.completed)
-                sub_total = len(children)
+                children = children_map.get(idx, [])
+                sub_done, sub_total = child_stats.get(idx, (0, 0))
                 node.set_label(
                     _step_label(
                         step,
@@ -1981,7 +2044,7 @@ class VeriTrakkApp(App):
                         show_process_badge=proc.kind == "work_quest",
                         sub_done=sub_done if children else None,
                         sub_total=sub_total if children else None,
-                        live_seconds=self._live_step_seconds(idx, now),
+                        live_seconds=live_seconds.get(idx, max(0, step.duration_seconds)),
                     )
                 )
             for child in node.children:
