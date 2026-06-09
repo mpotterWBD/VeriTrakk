@@ -2654,15 +2654,66 @@ class VeriTrakkApp(App):
             self.notify("Unpause this task before running its linked process.", severity="warning")
             return
 
-        # Launching a linked process moves this task into active in-progress state.
-        now_iso = datetime.now().isoformat()
+        # Linked templates follow the normal run flow: prompt for run ID and spawn an instance.
+        try:
+            linked_proc = load_process(link_path)
+        except OSError:
+            self.notify("Linked process file is missing.", severity="error")
+            return
+
+        if (
+            linked_proc.kind == "process"
+            and linked_proc.spawn_instances
+            and link_path.suffix == ".prcss"
+            and "#" not in link_path.stem
+        ):
+            self.push_screen(
+                RunIDScreen(link_path.stem),
+                callback=lambda run_id: self._launch_linked_template_instance(step_idx, link_path, run_id),
+            )
+            return
+
+        self._launch_linked_process_file(step_idx, link_path)
+
+    def _launch_linked_template_instance(self, step_idx: int, template_path: Path, run_id: str | None) -> None:
+        if run_id is None or not self._process or not self._proc_path:
+            return
+
+        try:
+            instance_path = create_process_instance(template_path, run_id)
+        except OSError:
+            self.notify("Could not create process instance.", severity="error")
+            return
+
+        self._process.steps[step_idx].linked_process_path = str(instance_path)
+        save_process(self._process, self._proc_path)
+        self.notify(
+            f"New run: {instance_path.name}",
+            title="Process Instance Created",
+            severity="information",
+        )
+        self._launch_linked_process_file(step_idx, instance_path)
+
+    def _launch_linked_process_file(self, step_idx: int, link_path: Path) -> None:
+        if not self._process or not self._proc_path:
+            return
+
+        step = self._process.steps[step_idx]
+        now = datetime.now()
+
+        # Preserve any time already spent on the current work-quest task before leaving it.
+        if step.started and not step.completed and not step.paused and step.active_since:
+            self._accumulate_active_minutes(step_idx, now)
+
+        # Launching a linked process suspends the current task while the linked process runs.
+        now_iso = now.isoformat()
         if not step.started:
             step.started = True
             step.started_at = step.started_at or now_iso
         step.completed = False
         step.completed_at = ""
-        step.paused = False
-        step.active_since = now_iso
+        step.paused = True
+        step.active_since = ""
         self._sync_parent_states_from_children()
 
         # Persist current work quest state before switching context.
@@ -2855,8 +2906,8 @@ class VeriTrakkApp(App):
     def _on_link_process_selected(self, step_idx: int, path: Path | None) -> None:
         if path is None or not self._build_proc:
             return
-        if path.suffix != ".prcss" or "#" not in path.stem:
-            self.notify("Select a process instance file (.prcss with '#').", severity="warning")
+        if path.suffix != ".prcss":
+            self.notify("Select a process file (.prcss).", severity="warning")
             return
 
         self._build_proc.steps[step_idx].linked_process_path = str(path)
