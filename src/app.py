@@ -2700,20 +2700,15 @@ class VeriTrakkApp(App):
 
         step = self._process.steps[step_idx]
         now = datetime.now()
-
-        # Preserve any time already spent on the current work-quest task before leaving it.
-        if step.started and not step.completed and not step.paused and step.active_since:
-            self._accumulate_active_minutes(step_idx, now)
-
-        # Launching a linked process suspends the current task while the linked process runs.
         now_iso = now.isoformat()
         if not step.started:
             step.started = True
             step.started_at = step.started_at or now_iso
+        if not step.active_since:
+            step.active_since = now_iso
         step.completed = False
         step.completed_at = ""
-        step.paused = True
-        step.active_since = ""
+        step.paused = False
         self._sync_parent_states_from_children()
 
         # Persist current work quest state before switching context.
