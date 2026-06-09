@@ -1085,6 +1085,7 @@ class VeriTrakkApp(App):
     _build_proc:        Process | None = None
     _build_dir:         Path    | None = None
     _build_path:        Path    | None = None  # set when editing an existing file
+    _build_root_path:   Path    | None = None  # base template for spawned instances
     _build_kind:        str           = "process"
     _build_spawn_instances: bool      = True
     _pending_thresh_idx: int           = -1
@@ -1156,6 +1157,7 @@ class VeriTrakkApp(App):
                         yield Button("+ Sub Task", id="btn_add_sub",     variant="success", classes="build_btn")
                         yield Button("Delete",     id="btn_del_step",    variant="error",   classes="build_btn")
                         yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
+                        yield Button("Reset",      id="btn_reset_proc",  variant="warning", classes="build_btn")
                         yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
@@ -1421,7 +1423,6 @@ class VeriTrakkApp(App):
     def _show_build(self, existing_path: Path | None = None) -> None:
         self._set_mode("build")
         if existing_path is not None:
-            existing_path = self._resolve_build_source_path(existing_path)
             try:
                 self._build_proc = load_process(existing_path)
             except Exception:
@@ -1430,9 +1431,11 @@ class VeriTrakkApp(App):
             self._build_dir  = existing_path.parent
             self._build_kind = self._build_proc.kind
             self._build_spawn_instances = self._build_proc.spawn_instances
+            self._build_root_path = self._root_template_path(existing_path)
         else:
             self._build_path = None
             self._build_dir = None
+            self._build_root_path = None
             default_name = "New Work Quest" if self._build_kind == "work_quest" else "New Process"
             self._build_proc = Process(
                 name=default_name,
@@ -1493,6 +1496,7 @@ class VeriTrakkApp(App):
         is_work_quest = self._build_proc is not None and self._build_proc.kind == "work_quest"
         self.query_one("#btn_shift_up", Button).display = is_process
         self.query_one("#btn_shift_down", Button).display = is_process
+        self.query_one("#btn_reset_proc", Button).display = is_process
         self.query_one("#btn_link_process", Button).display = is_work_quest
         if self._build_proc and self._build_proc.kind == "process":
             kind_label = "Template" if self._build_proc.spawn_instances else "Unique"
@@ -1535,6 +1539,8 @@ class VeriTrakkApp(App):
             self.action_shift_step_down(); return
         if bid == "btn_save_proc":
             self.action_save_build(); return
+        if bid == "btn_reset_proc":
+            self.action_reset_build(); return
 
     # ── New / Open / Resume / Build flows ─────────────────────────────────────
     def _start_new_process(self) -> None:
@@ -1565,23 +1571,23 @@ class VeriTrakkApp(App):
             return
         self._show_build(existing_path=path)
 
-    def _resolve_build_source_path(self, path: Path) -> Path:
-        """Prefer editing the original base process when given an instance file path."""
+    def _root_template_path(self, path: Path) -> Path | None:
+        """Return the base template path for a spawned .prcss instance, if available."""
         if path.suffix != ".prcss" or "#" not in path.stem:
-            return path
+            return None
 
         base_name = path.stem.split("#", 1)[0] + path.suffix
         base_path = path.with_name(base_name)
         if not base_path.exists():
-            return path
+            return None
 
         try:
             base_proc = load_process(base_path)
         except Exception:
-            return path
+            return None
 
         if base_proc.kind != "process":
-            return path
+            return None
 
         return base_path
 
@@ -3119,6 +3125,14 @@ class VeriTrakkApp(App):
         if name:
             self._build_proc.name = name
         if self._build_path:
+            if self._build_root_path and self._build_root_path != self._build_path:
+                self.push_screen(
+                    ConfirmScreen(
+                        f"Apply these changes to the root process too?\n\nRoot: {self._build_root_path.name}"
+                    ),
+                    callback=self._on_save_root_confirmed,
+                )
+                return
             # Editing an existing file — save in place
             self._do_save_build(self._build_path)
         else:
@@ -3130,6 +3144,64 @@ class VeriTrakkApp(App):
                 FilePickerScreen("save", start=start, filename=suggested, save_ext=ext),
                 callback=self._on_save_dialog,
             )
+
+    def _on_save_root_confirmed(self, confirmed: bool | None) -> None:
+        if not confirmed or not self._build_proc or not self._build_path:
+            return
+
+        current_path = self._build_path
+        root_path = self._build_root_path
+        try:
+            save_process(self._build_proc, current_path)
+        except OSError:
+            return
+
+        if root_path is None:
+            self._do_save_build(current_path)
+            return
+
+        self._build_path = root_path
+        self._do_save_build(root_path)
+
+    def action_reset_build(self) -> None:
+        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "process":
+            return
+        self.push_screen(
+            ConfirmScreen("Reset this process to incomplete status for every step?"),
+            callback=self._on_reset_build_confirmed,
+        )
+
+    def _on_reset_build_confirmed(self, confirmed: bool | None) -> None:
+        if not confirmed or not self._build_proc:
+            return
+
+        self._reset_process_state(self._build_proc)
+
+        if self._build_path:
+            self._do_save_build(self._build_path)
+        else:
+            self._rebuild_builder_tree()
+            self._refresh_build_terminology()
+            self._update_build_file_label()
+            self._refresh_status()
+
+    def _reset_process_state(self, proc: Process) -> None:
+        proc.completed = False
+        proc.completed_at = ""
+        proc.clocked_in = False
+        proc.clock_active_since = ""
+        proc.clock_events.clear()
+        for step in proc.steps:
+            step.started = False
+            step.started_at = ""
+            step.paused = False
+            step.active_since = ""
+            step.completed = False
+            step.completed_at = ""
+            step.duration_minutes = 0
+            step.duration_seconds = 0
+            step.captured_text_input = ""
+            step.result = ""
 
     def _on_save_dialog(self, path: Path | None) -> None:
         if path is None:
@@ -3165,8 +3237,16 @@ class VeriTrakkApp(App):
             label_text = Text("New (unsaved)", style=f"bold {_GOLD}")
 
         if self._build_proc and self._build_proc.kind == "process":
-            badge = " Template" if self._build_proc.spawn_instances else " Unique"
-            badge_style = f"bold {_GREEN}" if self._build_proc.spawn_instances else f"bold {_PURPLE}"
+            if self._build_root_path and self._build_path and self._build_root_path != self._build_path:
+                badge = " Instance"
+                badge_style = f"bold {_PURPLE}"
+                label_text.append(f"  root: {self._build_root_path.name}", style=f"dim {_KHAKI}")
+            elif self._build_proc.spawn_instances:
+                badge = " Template"
+                badge_style = f"bold {_GREEN}"
+            else:
+                badge = " Unique"
+                badge_style = f"bold {_PURPLE}"
             label_text.append(f"{badge}", style=badge_style)
 
         label.update(label_text)
