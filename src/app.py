@@ -1078,6 +1078,7 @@ class VeriTrakkApp(App):
         Binding("a",      "add_step",      "Add Task",    show=False),
         Binding("s",      "add_sub_step",  "Add Sub Task", show=False),
         Binding("e",      "edit_step",     "Edit",        show=False),
+        Binding("c",      "copy_step",     "Copy",        show=True),
         Binding("d",      "delete_step",   "Delete",      show=False),
         Binding("ctrl+up",   "shift_step_up",   "Shift Up",   show=False),
         Binding("ctrl+down", "shift_step_down", "Shift Down", show=False),
@@ -1171,6 +1172,7 @@ class VeriTrakkApp(App):
                         yield Button("Delete",     id="btn_del_step",    variant="error",   classes="build_btn")
                         yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
                         yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
+                        yield Button("Copy",       id="btn_copy_step",   variant="default", classes="build_btn")
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
                         yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
@@ -1509,6 +1511,7 @@ class VeriTrakkApp(App):
         is_work_quest = self._build_proc is not None and self._build_proc.kind == "work_quest"
         self.query_one("#btn_shift_up", Button).display = is_process
         self.query_one("#btn_shift_down", Button).display = is_process
+        self.query_one("#btn_copy_step", Button).display = is_process
         self.query_one("#btn_link_process", Button).display = is_work_quest
         self.query_one("#btn_carry_over", Button).display = is_work_quest
         if self._build_proc and self._build_proc.kind == "process":
@@ -1546,6 +1549,8 @@ class VeriTrakkApp(App):
             self.action_carry_over(); return
         if bid == "btn_edit_step":
             self.action_edit_step(); return
+        if bid == "btn_copy_step":
+            self.action_copy_step(); return
         if bid == "btn_del_step":
             self.action_delete_step(); return
         if bid == "btn_shift_up":
@@ -3254,6 +3259,23 @@ class VeriTrakkApp(App):
         self._rebuild_builder_tree()
         self.query_one("#builder_tree", Tree).focus()
 
+    def action_copy_step(self) -> None:
+        if self._mode != "build" or not self._build_proc:
+            return
+        if self._build_proc.kind != "process":
+            return
+        cur_idx = self._focused_build_idx()
+        if cur_idx is None:
+            return
+
+        proc = self._build_proc
+        end = proc.subtree_end_exclusive(cur_idx)
+        copied_subtree = [copy.deepcopy(step) for step in proc.steps[cur_idx:end]]
+        proc.steps[end:end] = copied_subtree
+
+        self._rebuild_builder_tree()
+        self._move_builder_cursor_to(end)
+
     def action_shift_step_up(self) -> None:
         if self._mode != "build" or not self._build_proc:
             return
@@ -3482,6 +3504,13 @@ class VeriTrakkApp(App):
             return self._mode == "run"
         if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
             return self._mode == "build" and not isinstance(self.focused, Input)
+        if action == "copy_step":
+            return (
+                self._mode == "build"
+                and not isinstance(self.focused, Input)
+                and self._build_proc is not None
+                and self._build_proc.kind == "process"
+            )
         if action == "link_process":
             return (
                 self._mode == "build"
