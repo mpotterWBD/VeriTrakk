@@ -5,6 +5,7 @@ toolbar-driven navigation, and CSV-backed data model.
 """
 from __future__ import annotations
 
+import copy
 import random
 import re
 from datetime import datetime
@@ -1157,7 +1158,6 @@ class VeriTrakkApp(App):
                         yield Button("+ Sub Task", id="btn_add_sub",     variant="success", classes="build_btn")
                         yield Button("Delete",     id="btn_del_step",    variant="error",   classes="build_btn")
                         yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
-                        yield Button("Reset",      id="btn_reset_proc",  variant="warning", classes="build_btn")
                         yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
@@ -1496,7 +1496,6 @@ class VeriTrakkApp(App):
         is_work_quest = self._build_proc is not None and self._build_proc.kind == "work_quest"
         self.query_one("#btn_shift_up", Button).display = is_process
         self.query_one("#btn_shift_down", Button).display = is_process
-        self.query_one("#btn_reset_proc", Button).display = is_process
         self.query_one("#btn_link_process", Button).display = is_work_quest
         if self._build_proc and self._build_proc.kind == "process":
             kind_label = "Template" if self._build_proc.spawn_instances else "Unique"
@@ -1539,8 +1538,6 @@ class VeriTrakkApp(App):
             self.action_shift_step_down(); return
         if bid == "btn_save_proc":
             self.action_save_build(); return
-        if bid == "btn_reset_proc":
-            self.action_reset_build(); return
 
     # ── New / Open / Resume / Build flows ─────────────────────────────────────
     def _start_new_process(self) -> None:
@@ -1576,20 +1573,28 @@ class VeriTrakkApp(App):
         if path.suffix != ".prcss" or "#" not in path.stem:
             return None
 
-        base_name = path.stem.split("#", 1)[0] + path.suffix
-        base_path = path.with_name(base_name)
-        if not base_path.exists():
-            return None
+        before_hash = path.stem.split("#", 1)[0]
+        candidate_names = [before_hash]
+        tagged = re.match(r"^(.*)\[[^\]]+\]$", before_hash)
+        if tagged and tagged.group(1):
+            candidate_names.append(tagged.group(1))
 
-        try:
-            base_proc = load_process(base_path)
-        except Exception:
-            return None
+        seen: set[str] = set()
+        for candidate in candidate_names:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            base_path = path.with_name(candidate + path.suffix)
+            if not base_path.exists():
+                continue
+            try:
+                base_proc = load_process(base_path)
+            except Exception:
+                continue
+            if base_proc.kind == "process":
+                return base_path
 
-        if base_proc.kind != "process":
-            return None
-
-        return base_path
+        return None
 
     def _resume(self) -> None:
         sess = load_session()
@@ -2756,9 +2761,8 @@ class VeriTrakkApp(App):
         if not self._proc_path or self._proc_path.suffix != ".prcss" or "#" not in self._proc_path.stem:
             return notes_text
 
-        base_name = self._proc_path.stem.split("#", 1)[0] + self._proc_path.suffix
-        base_path = self._proc_path.with_name(base_name)
-        if not base_path.exists():
+        base_path = self._root_template_path(self._proc_path)
+        if base_path is None:
             return notes_text
 
         try:
@@ -3146,44 +3150,22 @@ class VeriTrakkApp(App):
             )
 
     def _on_save_root_confirmed(self, confirmed: bool | None) -> None:
-        if not confirmed or not self._build_proc or not self._build_path:
+        if not self._build_proc or not self._build_path:
             return
 
         current_path = self._build_path
         root_path = self._build_root_path
+        self._do_save_build(current_path)
+
+        # User selected Cancel/No-root: keep normal save behavior (instance only).
+        if not confirmed or root_path is None:
+            return
+
         try:
-            save_process(self._build_proc, current_path)
+            save_process(self._process_for_save(self._build_proc, root_path), root_path)
+            self.notify(f"Updated root template: {root_path.name}", severity="information")
         except OSError:
-            return
-
-        if root_path is None:
-            self._do_save_build(current_path)
-            return
-
-        self._build_path = root_path
-        self._do_save_build(root_path)
-
-    def action_reset_build(self) -> None:
-        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "process":
-            return
-        self.push_screen(
-            ConfirmScreen("Reset this process to incomplete status for every step?"),
-            callback=self._on_reset_build_confirmed,
-        )
-
-    def _on_reset_build_confirmed(self, confirmed: bool | None) -> None:
-        if not confirmed or not self._build_proc:
-            return
-
-        self._reset_process_state(self._build_proc)
-
-        if self._build_path:
-            self._do_save_build(self._build_path)
-        else:
-            self._rebuild_builder_tree()
-            self._refresh_build_terminology()
-            self._update_build_file_label()
-            self._refresh_status()
+            self.notify("Could not update root template.", severity="error")
 
     def _reset_process_state(self, proc: Process) -> None:
         proc.completed = False
@@ -3210,9 +3192,24 @@ class VeriTrakkApp(App):
         self._build_dir  = path.parent
         self._do_save_build(path)
 
+    def _is_root_template_save_target(self, proc: Process, save_path: Path) -> bool:
+        return (
+            proc.kind == "process"
+            and proc.spawn_instances
+            and save_path.suffix == ".prcss"
+            and "#" not in save_path.stem
+        )
+
+    def _process_for_save(self, proc: Process, save_path: Path) -> Process:
+        if not self._is_root_template_save_target(proc, save_path):
+            return proc
+        sanitized = copy.deepcopy(proc)
+        self._reset_process_state(sanitized)
+        return sanitized
+
     def _do_save_build(self, save_path: Path) -> None:
         try:
-            save_process(self._build_proc, save_path)
+            save_process(self._process_for_save(self._build_proc, save_path), save_path)
             save_session(save_path.parent, save_path.name)
             self._proc_path = save_path
             self._process   = self._build_proc
@@ -3237,10 +3234,11 @@ class VeriTrakkApp(App):
             label_text = Text("New (unsaved)", style=f"bold {_GOLD}")
 
         if self._build_proc and self._build_proc.kind == "process":
-            if self._build_root_path and self._build_path and self._build_root_path != self._build_path:
+            if self._build_path and self._build_path.suffix == ".prcss" and "#" in self._build_path.stem:
                 badge = " Instance"
                 badge_style = f"bold {_PURPLE}"
-                label_text.append(f"  root: {self._build_root_path.name}", style=f"dim {_KHAKI}")
+                if self._build_root_path:
+                    label_text.append(f"  root: {self._build_root_path.name}", style=f"dim {_KHAKI}")
             elif self._build_proc.spawn_instances:
                 badge = " Template"
                 badge_style = f"bold {_GREEN}"
