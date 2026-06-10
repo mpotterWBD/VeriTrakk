@@ -234,6 +234,15 @@ class PrcssFileTree(DirectoryTree):
         ]
 
 
+class WorkQuestFileTree(DirectoryTree):
+    """Shows directories and active .wrkqst files only."""
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [
+            p for p in paths
+            if p.is_dir() or (p.suffix == ".wrkqst" and "#COMPLETE" not in p.name)
+        ]
+
+
 class LogFileTree(DirectoryTree):
     """Shows directories, log files, and #COMPLETE source files."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
@@ -884,7 +893,7 @@ class FilePickerScreen(ModalScreen):
         save_ext: str = ".prcss",
     ) -> None:
         super().__init__()
-        self._mode     = mode          # "open" | "open_prcss" | "save" | "logs"
+        self._mode     = mode          # "open" | "open_prcss" | "open_wrkqst" | "save" | "logs"
         self._start    = start or Path.home()
         self._filename = filename
         self._save_ext = save_ext
@@ -894,6 +903,7 @@ class FilePickerScreen(ModalScreen):
         titles = {
             "open": "Open Process",
             "open_prcss": "Link Process",
+            "open_wrkqst": "Carry Over To Work Quest",
             "save": "Save Process As",
             "logs": "Browse Logs",
         }
@@ -904,6 +914,8 @@ class FilePickerScreen(ModalScreen):
                 yield ProcessFileTree(self._start, id="fp_tree")
             elif self._mode == "open_prcss":
                 yield PrcssFileTree(self._start, id="fp_tree")
+            elif self._mode == "open_wrkqst":
+                yield WorkQuestFileTree(self._start, id="fp_tree")
             elif self._mode == "save":
                 yield DirOnlyTree(self._start, id="fp_tree")
                 yield Label("Filename")
@@ -926,7 +938,7 @@ class FilePickerScreen(ModalScreen):
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         path = Path(str(event.path))
-        if self._mode in ("open", "open_prcss", "logs"):
+        if self._mode in ("open", "open_prcss", "open_wrkqst", "logs"):
             self.dismiss(path)
         elif self._mode == "save":
             self._cur_dir = path.parent
@@ -1162,6 +1174,7 @@ class VeriTrakkApp(App):
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
                         yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
+                        yield Button("Carry Over", id="btn_carry_over", variant="warning", classes="build_btn")
                     yield Tree("New Process", id="builder_tree")
 
                 # logs viewer
@@ -1497,6 +1510,7 @@ class VeriTrakkApp(App):
         self.query_one("#btn_shift_up", Button).display = is_process
         self.query_one("#btn_shift_down", Button).display = is_process
         self.query_one("#btn_link_process", Button).display = is_work_quest
+        self.query_one("#btn_carry_over", Button).display = is_work_quest
         if self._build_proc and self._build_proc.kind == "process":
             kind_label = "Template" if self._build_proc.spawn_instances else "Unique"
             self.query_one("#side_build_title", Static).update(f"Building process ({kind_label}):")
@@ -1528,6 +1542,8 @@ class VeriTrakkApp(App):
             self.action_add_sub_step(); return
         if bid == "btn_link_process":
             self.action_link_process(); return
+        if bid == "btn_carry_over":
+            self.action_carry_over(); return
         if bid == "btn_edit_step":
             self.action_edit_step(); return
         if bid == "btn_del_step":
@@ -1836,10 +1852,7 @@ class VeriTrakkApp(App):
     def _sync_duration_minutes(self, step: Step) -> None:
         step.duration_minutes = max(0, step.duration_seconds // 60)
 
-    def _sync_parent_states_from_children(self) -> None:
-        if not self._process:
-            return
-        proc = self._process
+    def _sync_parent_states_for_process(self, proc: Process) -> None:
         for idx in range(len(proc.steps) - 1, -1, -1):
             parent = proc.steps[idx]
             children = proc.children_of(idx)
@@ -1854,7 +1867,6 @@ class VeriTrakkApp(App):
             any_active = any(child.started and not child.completed and not child.paused for child in child_steps)
             all_done = all(child.completed for child in child_steps)
 
-            # Parent run-state is derived from children currently in progress.
             parent.started = any_in_progress
             parent.started_at = min(started_stamps) if (any_in_progress or all_done) and started_stamps else ""
             parent.completed = all_done
@@ -1863,6 +1875,11 @@ class VeriTrakkApp(App):
             parent.active_since = ""
             parent.duration_seconds = sum(max(0, child.duration_seconds) for child in child_steps)
             self._sync_duration_minutes(parent)
+
+    def _sync_parent_states_from_children(self) -> None:
+        if not self._process:
+            return
+        self._sync_parent_states_for_process(self._process)
 
     def _active_step_idx(self, *, exclude_idx: int | None = None) -> int | None:
         if not self._process:
@@ -2920,6 +2937,174 @@ class VeriTrakkApp(App):
         self._move_builder_cursor_to(step_idx)
         self.notify(f"Linked: {path.name}", severity="information")
 
+    def _reset_carried_step_state(self, step: Step) -> Step:
+        clone = copy.deepcopy(step)
+        clone.started = False
+        clone.started_at = ""
+        clone.paused = False
+        clone.active_since = ""
+        clone.completed = False
+        clone.completed_at = ""
+        clone.duration_minutes = 0
+        clone.duration_seconds = 0
+        clone.captured_text_input = ""
+        clone.result = ""
+        return clone
+
+    def _steps_to_forest(self, steps: list[Step]) -> list[dict[str, object]]:
+        forest: list[dict[str, object]] = []
+        stack: list[dict[str, object]] = []
+        for step in steps:
+            node = {"step": copy.deepcopy(step), "children": []}
+            while stack and (stack[-1]["step"]).level >= step.level:
+                stack.pop()
+            if stack:
+                (stack[-1]["children"]).append(node)
+            else:
+                forest.append(node)
+            stack.append(node)
+        return forest
+
+    def _merge_forest_by_parent_name(self, destination: list[dict[str, object]], incoming: list[dict[str, object]]) -> None:
+        for node in incoming:
+            incoming_step = node["step"]
+            incoming_children = node["children"]
+
+            # Parent de-duplication: if a same-name node already exists at this sibling level,
+            # fold incoming children into the existing node instead of adding another parent node.
+            matching_parent = None
+            if incoming_children:
+                for existing in destination:
+                    existing_step = existing["step"]
+                    if existing_step.label == incoming_step.label:
+                        matching_parent = existing
+                        break
+
+            if matching_parent is not None:
+                self._merge_forest_by_parent_name(matching_parent["children"], incoming_children)
+                continue
+
+            destination.append(copy.deepcopy(node))
+
+    def _flatten_forest(self, forest: list[dict[str, object]], level: int = 1) -> list[Step]:
+        flat: list[Step] = []
+        for node in forest:
+            step = node["step"]
+            step.level = level
+            flat.append(step)
+            flat.extend(self._flatten_forest(node["children"], level + 1))
+        return flat
+
+    def action_carry_over(self) -> None:
+        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "work_quest":
+            return
+        self.push_screen(
+            FilePickerScreen("open_wrkqst", start=Path.home()),
+            callback=self._on_carry_over_selected,
+        )
+
+    def _on_carry_over_selected(self, destination_path: Path | None) -> None:
+        if destination_path is None or not self._build_proc:
+            return
+        if destination_path.suffix != ".wrkqst":
+            self.notify("Select a work quest file (.wrkqst).", severity="warning")
+            return
+        if self._build_path and destination_path == self._build_path:
+            self.notify("Choose a different destination work quest.", severity="warning")
+            return
+
+        try:
+            destination_proc = load_process(destination_path)
+        except OSError:
+            self.notify("Could not load selected work quest.", severity="error")
+            return
+
+        if destination_proc.kind != "work_quest":
+            self.notify("Selected file is not a work quest.", severity="warning")
+            return
+
+        total_steps = len(self._build_proc.steps)
+        if total_steps == 0:
+            self.notify("Current work quest has no tasks to carry over.", severity="information")
+            return
+
+        children_map: dict[int, list[int]] = {i: [] for i in range(total_steps)}
+        stack: list[int] = []
+        for idx, step in enumerate(self._build_proc.steps):
+            while stack and self._build_proc.steps[stack[-1]].level >= step.level:
+                stack.pop()
+            if stack:
+                children_map[stack[-1]].append(idx)
+            stack.append(idx)
+
+        keep_in_source = [False] * total_steps
+        carry_to_target = [False] * total_steps
+        for idx in range(total_steps - 1, -1, -1):
+            step = self._build_proc.steps[idx]
+            child_idxs = children_map[idx]
+            any_kept_child = any(keep_in_source[child_idx] for child_idx in child_idxs)
+            any_carried_child = any(carry_to_target[child_idx] for child_idx in child_idxs)
+
+            keep_in_source[idx] = step.completed or any_kept_child
+            carry_to_target[idx] = (not step.completed) or any_carried_child
+
+        carried_steps = [
+            self._reset_carried_step_state(self._build_proc.steps[idx])
+            for idx in range(total_steps)
+            if carry_to_target[idx]
+        ]
+        carried_leaf_count = sum(
+            1
+            for idx in range(total_steps)
+            if carry_to_target[idx] and not children_map[idx] and not self._build_proc.steps[idx].completed
+        )
+
+        if not carried_steps:
+            self.notify("No unfinished tasks found to carry over.", severity="information")
+            return
+
+        source_proc_updated = copy.deepcopy(self._build_proc)
+        source_proc_updated.steps = [self._build_proc.steps[idx] for idx in range(total_steps) if keep_in_source[idx]]
+        self._sync_parent_states_for_process(source_proc_updated)
+        source_proc_updated.completed = source_proc_updated.is_fully_complete()
+        if not source_proc_updated.completed:
+            source_proc_updated.completed_at = ""
+
+        destination_proc_updated = copy.deepcopy(destination_proc)
+        destination_forest = self._steps_to_forest(destination_proc_updated.steps)
+        carried_forest = self._steps_to_forest(carried_steps)
+        self._merge_forest_by_parent_name(destination_forest, carried_forest)
+        destination_proc_updated.steps = self._flatten_forest(destination_forest)
+        self._sync_parent_states_for_process(destination_proc_updated)
+        destination_proc_updated.completed = destination_proc_updated.is_fully_complete()
+        if not destination_proc_updated.completed:
+            destination_proc_updated.completed_at = ""
+
+        try:
+            save_process(destination_proc_updated, destination_path)
+        except OSError:
+            self.notify("Carry over failed while updating destination work quest.", severity="error")
+            return
+
+        if self._build_path:
+            try:
+                save_process(source_proc_updated, self._build_path)
+            except OSError:
+                self.notify(
+                    "Destination updated, but current source work quest could not be saved.",
+                    severity="error",
+                )
+                return
+
+        self._build_proc = source_proc_updated
+
+        self._rebuild_builder_tree()
+        self.query_one("#builder_tree", Tree).focus()
+        self.notify(
+            f"Carried over {carried_leaf_count} unfinished tasks to {destination_path.name}.",
+            severity="information",
+        )
+
     def _move_builder_cursor_to(self, target_idx: int) -> None:
         """Schedule a cursor move to the node with data==target_idx after the tree redraws."""
         self.call_after_refresh(self._do_move_builder_cursor, target_idx)
@@ -3298,6 +3483,13 @@ class VeriTrakkApp(App):
         if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
             return self._mode == "build" and not isinstance(self.focused, Input)
         if action == "link_process":
+            return (
+                self._mode == "build"
+                and not isinstance(self.focused, Input)
+                and self._build_proc is not None
+                and self._build_proc.kind == "work_quest"
+            )
+        if action == "carry_over":
             return (
                 self._mode == "build"
                 and not isinstance(self.focused, Input)
