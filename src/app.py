@@ -529,6 +529,8 @@ class StepScreen(ModalScreen):
         Binding("escape", "cancel", "Cancel"),
         Binding("up", "prev_item", "Previous Item", show=False),
         Binding("down", "next_item", "Next Item", show=False),
+        Binding("right", "indent_item", "Sub Process", show=False),
+        Binding("left", "outdent_item", "Parent Process", show=False),
     ]
 
     def __init__(
@@ -539,6 +541,7 @@ class StepScreen(ModalScreen):
         allow_main_quest: bool = False,
         multi_mode: bool = False,
         parent_label: str = "",
+        start_level: int = 1,
     ) -> None:
         super().__init__()
         self._ex    = existing
@@ -547,8 +550,15 @@ class StepScreen(ModalScreen):
         self._allow_main_quest = allow_main_quest
         self._multi_mode = multi_mode
         self._parent_label = parent_label
+        self._hierarchy_mode = self._multi_mode and self._allow_thresholds
+        self._min_level = max(1, start_level)
+        self._current_level = self._min_level
         self._items: list[dict[str, str | bool]] = []
         self._idx = 0
+
+    def _level_prefix(self, level: int) -> str:
+        depth = max(0, level - self._min_level)
+        return ">" * depth
 
     @staticmethod
     def _parse_float(raw: str) -> float | None:
@@ -599,7 +609,7 @@ class StepScreen(ModalScreen):
         main_quest = self.query_one("#step_main_quest", Switch).value if self._allow_main_quest else False
         manual_pf = self.query_one("#step_manual_pf", Switch).value if self._allow_thresholds else False
         requires_text_input = self.query_one("#step_requires_text", Switch).value if self._allow_thresholds else False
-        return {
+        payload: dict[str, str | bool] = {
             "label": self.query_one("#step_label", Input).value.strip(),
             "threshold_upper": upper,
             "threshold_lower": lower,
@@ -610,6 +620,9 @@ class StepScreen(ModalScreen):
             "manual_pass_fail": manual_pf,
             "requires_text_input": requires_text_input,
         }
+        if self._hierarchy_mode:
+            payload["level"] = self._current_level
+        return payload
 
     def _set_inputs_from_payload(self, payload: dict[str, str | bool] | None = None) -> None:
         payload = payload or {
@@ -624,6 +637,8 @@ class StepScreen(ModalScreen):
             "requires_text_input": False,
         }
         self.query_one("#step_label", Input).value = payload.get("label", "")
+        if self._hierarchy_mode:
+            self._current_level = int(payload.get("level", self._current_level))
         if self._allow_thresholds:
             self.query_one("#step_nominal", Input).value = payload.get("target_value", "")
             self.query_one("#step_tolerance", Input).value = payload.get("tolerance_pct", "")
@@ -659,15 +674,35 @@ class StepScreen(ModalScreen):
         delete_btn = self.query_one("#btn_delete", Button)
 
         if self._is_draft():
-            meta.update(f"Draft Item {len(self._items) + 1} of {len(self._items) + 1}")
+            meta_text = f"Draft Item {len(self._items) + 1} of {len(self._items) + 1}"
             delete_btn.disabled = True
         else:
-            meta.update(f"Editing Item {self._idx + 1} of {len(self._items)}")
+            meta_text = f"Editing Item {self._idx + 1} of {len(self._items)}"
             delete_btn.disabled = False
 
+        if self._hierarchy_mode:
+            current_prefix = self._level_prefix(self._current_level)
+            level_text = current_prefix if current_prefix else "(root)"
+            meta_text = f"{meta_text}  |  Level {level_text}"
+
+        meta.update(meta_text)
+
+        preview_items = [dict(item) for item in self._items]
+        current_payload = self._input_payload()
+        if self._is_draft():
+            # Show draft state immediately so right/left indentation feedback is instant.
+            if current_payload["label"] or self._hierarchy_mode:
+                preview_items.append(current_payload)
+        elif self._idx < len(preview_items):
+            # Mirror in-progress edits for the selected item before navigation commits.
+            preview_items[self._idx] = current_payload
+
         lines: list[str] = []
-        for i, item in enumerate(self._items, start=1):
-            parts = [f"{i}. {item['label']}"]
+        for i, item in enumerate(preview_items, start=1):
+            level = int(item.get("level", self._min_level))
+            prefix = self._level_prefix(level)
+            display_label = f"{prefix}{item['label']}" if prefix else f"{item['label']}"
+            parts = [f"{i}. {display_label}"]
             if item["threshold_upper"] or item["threshold_lower"]:
                 parts.append("[T]")
             if bool(item.get("manual_pass_fail", False)):
@@ -678,6 +713,19 @@ class StepScreen(ModalScreen):
                 parts.append("[M]")
             lines.append("  ".join(parts))
         preview.update("\n".join(lines) if lines else "No saved items yet.")
+
+    def _max_allowed_level(self) -> int:
+        if not self._hierarchy_mode:
+            return self._min_level
+        if self._is_draft():
+            if not self._items:
+                return self._min_level
+            prev_level = int(self._items[-1].get("level", self._min_level))
+            return max(self._min_level, prev_level + 1)
+        if self._idx <= 0:
+            return self._min_level
+        prev_level = int(self._items[self._idx - 1].get("level", self._min_level))
+        return max(self._min_level, prev_level + 1)
 
     def _load_current_into_inputs(self) -> None:
         if not self._multi_mode:
@@ -791,6 +839,18 @@ class StepScreen(ModalScreen):
             self._idx += 1
         self._load_current_into_inputs()
 
+    def action_indent_item(self) -> None:
+        if not self._hierarchy_mode:
+            return
+        self._current_level = min(self._current_level + 1, self._max_allowed_level())
+        self._refresh_multi_meta()
+
+    def action_outdent_item(self) -> None:
+        if not self._hierarchy_mode:
+            return
+        self._current_level = max(self._min_level, self._current_level - 1)
+        self._refresh_multi_meta()
+
     def on_key(self, event) -> None:
         if not self._multi_mode:
             return
@@ -799,6 +859,12 @@ class StepScreen(ModalScreen):
             event.stop()
         elif event.key == "down":
             self.action_next_item()
+            event.stop()
+        elif event.key == "right":
+            self.action_indent_item()
+            event.stop()
+        elif event.key == "left":
+            self.action_outdent_item()
             event.stop()
 
     def action_cancel(self) -> None:
@@ -3139,6 +3205,7 @@ class VeriTrakkApp(App):
                 allow_thresholds=self._build_proc is not None and self._build_proc.kind == "process",
                 allow_main_quest=self._build_proc is not None and self._build_proc.kind == "work_quest",
                 multi_mode=True,
+                start_level=1,
             ),
             callback=self._on_add_step,
         )
@@ -3159,8 +3226,9 @@ class VeriTrakkApp(App):
         else:
             insert_at = len(self._build_proc.steps)
         for offset, item in enumerate(items):
+            step_level = int(item.get("level", 1)) if self._build_proc.kind == "process" else 1
             self._build_proc.steps.insert(insert_at + offset, Step(
-                label=item["label"], level=1,
+                label=item["label"], level=step_level,
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
                 note=str(item.get("note", "")),
@@ -3181,6 +3249,9 @@ class VeriTrakkApp(App):
             parent = self._build_proc.steps[cur_idx]
             number_prefix = self._step_number(self._build_proc, cur_idx) if self._build_proc.kind == "process" else ""
             parent_label = f"{number_prefix} {parent.label}" if number_prefix else parent.label
+            start_level = parent.level + 1
+        else:
+            start_level = 2
         self.push_screen(
             StepScreen(
                 title=f"Add {sub_item_term}",
@@ -3188,6 +3259,7 @@ class VeriTrakkApp(App):
                 allow_main_quest=False,
                 multi_mode=True,
                 parent_label=parent_label,
+                start_level=start_level,
             ),
             callback=self._on_add_sub,
         )
@@ -3203,8 +3275,9 @@ class VeriTrakkApp(App):
         step = proc.steps[cur_idx]
         insert_at = proc.last_descendant_idx(cur_idx) + 1
         for offset, item in enumerate(items):
+            step_level = int(item.get("level", step.level + 1)) if self._build_proc.kind == "process" else step.level + 1
             proc.steps.insert(insert_at + offset, Step(
-                label=item["label"], level=step.level + 1,
+                label=item["label"], level=step_level,
                 threshold_upper=item["threshold_upper"],
                 threshold_lower=item["threshold_lower"],
                 note=str(item.get("note", "")),
