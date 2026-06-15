@@ -1153,6 +1153,7 @@ class VeriTrakkApp(App):
         Binding("r",      "run_linked_process", "Run Process", show=True),
         Binding("b",      "back_to_work_quest", "Back To Work Quest", show=True),
         Binding("x",      "close_active", "Close Active", show=True),
+        Binding("m",      "toggle_move_step", "Move", show=False),
         # Global
         Binding("escape", "go_back", "Back", show=True),
         Binding("q",      "quit",    "Quit", show=True),
@@ -1178,6 +1179,8 @@ class VeriTrakkApp(App):
     _matrix_bottom_columns: list[dict[str, int]] = []
     _matrix_top_words: list[dict[str, int | str]] = []
     _matrix_bottom_words: list[dict[str, int | str]] = []
+    _build_move_mode: bool = False
+    _build_move_source_idx: int | None = None
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
@@ -1239,6 +1242,7 @@ class VeriTrakkApp(App):
                         yield Button("Save",       id="btn_save_proc",   variant="primary", classes="build_btn")
                         yield Button("Edit",       id="btn_edit_step",   variant="default", classes="build_btn")
                         yield Button("Copy",       id="btn_copy_step",   variant="default", classes="build_btn")
+                        yield Button("Move",       id="btn_move_step",   variant="default", classes="build_btn")
                         yield Button("↑ Shift Up",   id="btn_shift_up",   variant="default", classes="build_btn")
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
                         yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
@@ -1450,6 +1454,7 @@ class VeriTrakkApp(App):
 
     # ── Show methods ──────────────────────────────────────────────────────────
     def _show_home(self) -> None:
+        self._set_build_move_mode(False)
         self._set_mode("home")
         self._switch("side_home", "view_home")
         self.query_one("#status_bar", Static).update("")
@@ -1503,6 +1508,7 @@ class VeriTrakkApp(App):
 
     def _show_build(self, existing_path: Path | None = None) -> None:
         self._set_mode("build")
+        self._set_build_move_mode(False)
         if existing_path is not None:
             try:
                 self._build_proc = load_process(existing_path)
@@ -1575,9 +1581,10 @@ class VeriTrakkApp(App):
         self.query_one("#btn_add_sub", Button).label = f"+ {sub_item_term}"
         is_process = self._build_proc is not None and self._build_proc.kind == "process"
         is_work_quest = self._build_proc is not None and self._build_proc.kind == "work_quest"
-        self.query_one("#btn_shift_up", Button).display = is_process
-        self.query_one("#btn_shift_down", Button).display = is_process
+        self.query_one("#btn_shift_up", Button).display = self._build_proc is not None
+        self.query_one("#btn_shift_down", Button).display = self._build_proc is not None
         self.query_one("#btn_copy_step", Button).display = is_process
+        self.query_one("#btn_move_step", Button).display = is_work_quest
         self.query_one("#btn_link_process", Button).display = is_work_quest
         self.query_one("#btn_carry_over", Button).display = is_work_quest
         if self._build_proc and self._build_proc.kind == "process":
@@ -1587,6 +1594,7 @@ class VeriTrakkApp(App):
             self.query_one("#side_build_title", Static).update("Building work quest:")
         else:
             self.query_one("#side_build_title", Static).update("Building process:")
+        self._refresh_move_button_state()
 
     # ── Button handling ───────────────────────────────────────────────────────
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1617,6 +1625,8 @@ class VeriTrakkApp(App):
             self.action_edit_step(); return
         if bid == "btn_copy_step":
             self.action_copy_step(); return
+        if bid == "btn_move_step":
+            self.action_toggle_move_step(); return
         if bid == "btn_del_step":
             self.action_delete_step(); return
         if bid == "btn_shift_up":
@@ -2978,6 +2988,37 @@ class VeriTrakkApp(App):
 
         tree.root.expand()
 
+    def _refresh_move_button_state(self) -> None:
+        if self._mode != "build":
+            return
+        btn = self.query_one("#btn_move_step", Button)
+        if not self._build_move_mode:
+            btn.label = "Move"
+            btn.remove_class("active_mode")
+            return
+        if self._build_move_source_idx is None:
+            btn.label = "Move: Select Source"
+        else:
+            source_label = self._build_proc.steps[self._build_move_source_idx].label if self._build_proc else ""
+            btn.label = f"Move: Drop '{source_label}'"
+        btn.add_class("active_mode")
+
+    def _set_build_move_mode(self, enabled: bool) -> None:
+        self._build_move_mode = enabled
+        if not enabled:
+            self._build_move_source_idx = None
+        if self._mode == "build":
+            self._refresh_move_button_state()
+
+    def action_toggle_move_step(self) -> None:
+        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "work_quest":
+            return
+        self._set_build_move_mode(not self._build_move_mode)
+        if self._build_move_mode:
+            self.notify("Move mode on: click source task, then destination task.", severity="information")
+        else:
+            self.notify("Move mode off.", severity="information")
+
     def _focused_build_idx(self) -> int | None:
         node = self.query_one("#builder_tree", Tree).cursor_node
         return None if (node is None or node.data is None) else node.data
@@ -3198,6 +3239,7 @@ class VeriTrakkApp(App):
     def action_add_step(self) -> None:
         if self._mode != "build":
             return
+        self._set_build_move_mode(False)
         item_term, _ = self._build_terms()
         self.push_screen(
             StepScreen(
@@ -3242,6 +3284,7 @@ class VeriTrakkApp(App):
     def action_add_sub_step(self) -> None:
         if self._mode != "build":
             return
+        self._set_build_move_mode(False)
         _, sub_item_term = self._build_terms()
         cur_idx = self._focused_build_idx()
         parent_label = ""
@@ -3291,6 +3334,7 @@ class VeriTrakkApp(App):
     def action_edit_step(self) -> None:
         if self._mode != "build":
             return
+        self._set_build_move_mode(False)
         cur_idx = self._focused_build_idx()
         if cur_idx is None:
             return
@@ -3323,6 +3367,7 @@ class VeriTrakkApp(App):
     def action_delete_step(self) -> None:
         if self._mode != "build":
             return
+        self._set_build_move_mode(False)
         cur_idx = self._focused_build_idx()
         if cur_idx is None:
             return
@@ -3335,6 +3380,7 @@ class VeriTrakkApp(App):
     def action_copy_step(self) -> None:
         if self._mode != "build" or not self._build_proc:
             return
+        self._set_build_move_mode(False)
         if self._build_proc.kind != "process":
             return
         cur_idx = self._focused_build_idx()
@@ -3352,8 +3398,7 @@ class VeriTrakkApp(App):
     def action_shift_step_up(self) -> None:
         if self._mode != "build" or not self._build_proc:
             return
-        if self._build_proc.kind != "process":
-            return
+        self._set_build_move_mode(False)
         cur_idx = self._focused_build_idx()
         if cur_idx is None:
             return
@@ -3379,8 +3424,7 @@ class VeriTrakkApp(App):
     def action_shift_step_down(self) -> None:
         if self._mode != "build" or not self._build_proc:
             return
-        if self._build_proc.kind != "process":
-            return
+        self._set_build_move_mode(False)
         cur_idx = self._focused_build_idx()
         if cur_idx is None:
             return
@@ -3405,6 +3449,7 @@ class VeriTrakkApp(App):
     def action_save_build(self) -> None:
         if self._mode != "build" or not self._build_proc:
             return
+        self._set_build_move_mode(False)
         name = self.query_one("#build_name_inp", Input).value.strip()
         if name:
             self._build_proc.name = name
@@ -3567,6 +3612,73 @@ class VeriTrakkApp(App):
             self._update_step_info()
             self.refresh_bindings()
 
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if event.node.tree.id != "builder_tree":
+            return
+        if self._mode != "build" or not self._build_proc or not self._build_move_mode:
+            return
+        clicked_idx = None if event.node.data is None else int(event.node.data)
+        self._on_builder_move_click(clicked_idx)
+
+    def _on_builder_move_click(self, clicked_idx: int | None) -> None:
+        if not self._build_proc:
+            return
+        if clicked_idx is not None and (clicked_idx < 0 or clicked_idx >= len(self._build_proc.steps)):
+            return
+
+        if self._build_move_source_idx is None:
+            if clicked_idx is None:
+                self.notify("Select a task first, then pick where to move it.", severity="warning")
+                return
+            self._build_move_source_idx = clicked_idx
+            self._refresh_move_button_state()
+            self.notify(
+                f"Move source selected: {self._build_proc.steps[clicked_idx].label}. Now click destination task.",
+                severity="information",
+            )
+            return
+
+        source_idx = self._build_move_source_idx
+        dest_idx = clicked_idx
+
+        if dest_idx is not None and source_idx == dest_idx:
+            self.notify("Pick a different destination task.", severity="warning")
+            return
+
+        proc = self._build_proc
+        source_end = proc.subtree_end_exclusive(source_idx)
+        if dest_idx is not None and source_idx < dest_idx < source_end:
+            self.notify("Cannot move a task under its own subtree.", severity="warning")
+            return
+
+        moved_steps = proc.steps[source_idx:source_end]
+        if dest_idx is None:
+            level_delta = 1 - proc.steps[source_idx].level
+        else:
+            level_delta = (proc.steps[dest_idx].level + 1) - proc.steps[source_idx].level
+
+        del proc.steps[source_idx:source_end]
+        if dest_idx is not None and source_idx < dest_idx:
+            dest_idx -= (source_end - source_idx)
+
+        if dest_idx is None:
+            insert_at = len(proc.steps)
+        else:
+            insert_at = proc.subtree_end_exclusive(dest_idx)
+
+        for step in moved_steps:
+            step.level = max(1, step.level + level_delta)
+        proc.steps[insert_at:insert_at] = moved_steps
+
+        self._rebuild_builder_tree()
+        self._move_builder_cursor_to(insert_at)
+        self._build_move_source_idx = None
+        self._refresh_move_button_state()
+        if dest_idx is None:
+            self.notify("Task moved to main root. Select another source to keep moving, or press Move to exit.", severity="information")
+        else:
+            self.notify("Task moved. Select another source to keep moving, or press Move to exit.", severity="information")
+
     # ── Binding guards ────────────────────────────────────────────────────────
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action == "close_active":
@@ -3583,6 +3695,13 @@ class VeriTrakkApp(App):
                 and not isinstance(self.focused, Input)
                 and self._build_proc is not None
                 and self._build_proc.kind == "process"
+            )
+        if action == "toggle_move_step":
+            return (
+                self._mode == "build"
+                and not isinstance(self.focused, Input)
+                and self._build_proc is not None
+                and self._build_proc.kind == "work_quest"
             )
         if action == "link_process":
             return (
@@ -3603,7 +3722,6 @@ class VeriTrakkApp(App):
                 self._mode == "build"
                 and not isinstance(self.focused, Input)
                 and self._build_proc is not None
-                and self._build_proc.kind == "process"
             )
         if action == "run_linked_process":
             return self._current_linked_process_path() is not None
