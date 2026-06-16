@@ -430,11 +430,12 @@ class ThresholdScreen(ModalScreen):
         self._lower = lower
 
     def compose(self) -> ComposeResult:
+        upper, lower = self._normalized_bounds(self._upper, self._lower)
         parts: list[str] = []
-        if self._upper:
-            parts.append(f"Upper <= {self._upper}")
-        if self._lower:
-            parts.append(f"Lower >= {self._lower}")
+        if upper:
+            parts.append(f"Upper <= {upper}")
+        if lower:
+            parts.append(f"Lower >= {lower}")
         bounds = "  |  ".join(parts) if parts else "No bounds configured"
 
         with Vertical(id="modal_box"):
@@ -457,6 +458,21 @@ class ThresholdScreen(ModalScreen):
 
     def on_input_submitted(self, _: Input.Submitted) -> None:
         self._submit()
+
+    @staticmethod
+    def _normalized_bounds(upper: str, lower: str) -> tuple[str, str]:
+        try:
+            upper_value = float(upper) if upper else None
+        except ValueError:
+            upper_value = None
+        try:
+            lower_value = float(lower) if lower else None
+        except ValueError:
+            lower_value = None
+
+        if upper_value is not None and lower_value is not None and upper_value < lower_value:
+            return lower, upper
+        return upper, lower
 
     def _submit(self) -> None:
         self.dismiss(self.query_one("#thresh_inp", Input).value.strip())
@@ -594,7 +610,7 @@ class StepScreen(ModalScreen):
         if nominal is None or tolerance_pct is None:
             return
 
-        delta = nominal * (abs(tolerance_pct) / 100.0)
+        delta = abs(nominal) * (abs(tolerance_pct) / 100.0)
         upper = nominal + delta
         lower = nominal - delta
         self.query_one("#step_ut", Input).value = self._format_number(upper)
@@ -2521,6 +2537,9 @@ class VeriTrakkApp(App):
             lt = float(step.threshold_lower) if step.threshold_lower else None
         except ValueError:
             lt = None
+
+        if ut is not None and lt is not None and ut < lt:
+            ut, lt = lt, ut
 
         passed = (ut is None or value <= ut) and (lt is None or value >= lt)
         result = "PASS" if passed else "FAIL"
