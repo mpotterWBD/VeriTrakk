@@ -8,6 +8,10 @@ Screen {
     background: #0b0d0f;
 }
 
+ModalScreen {
+    align: center middle;
+}
+
 Header {
     background: #15181b;
     color: lightsalmon;
@@ -496,11 +500,15 @@ StepScreen #modal_box {
 
 #thresh_step_label {
     color: goldenrod;
+    text-align: center;
+    width: 100%;
     padding-bottom: 0;
 }
 
 #thresh_bounds {
     color: cadetblue;
+    text-align: center;
+    width: 100%;
     padding-bottom: 1;
 }
 
@@ -589,6 +597,14 @@ StepScreen #modal_box {
     color: darkkhaki;
     text-align: center;
     width: 100%;
+    padding: 1 0;
+}
+
+#edit_time_value {
+    width: 100%;
+    text-align: center;
+    content-align: center middle;
+    color: #7fd4d8;
     padding: 1 0;
 }
 

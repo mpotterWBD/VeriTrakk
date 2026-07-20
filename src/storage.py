@@ -68,6 +68,7 @@ class Process:
     clocked_in: bool = False
     clock_active_since: str = ""
     clock_events: list[str] = field(default_factory=list)
+    clock_adjust_seconds: int = 0
     completed: bool = False
     completed_at: str = ""
 
@@ -183,7 +184,7 @@ class Process:
             except ValueError:
                 pass
 
-        return total
+        return max(0, total + self.clock_adjust_seconds)
 
     def total_clock_minutes(self) -> int:
         """Total clocked minutes from IN/OUT events + active clock-in window."""
@@ -193,7 +194,7 @@ class Process:
 # ── CSV I/O ───────────────────────────────────────────────────────────────────
 
 _FIELDS = [
-    "kind", "spawn_instances", "clocked_in", "clock_active_since", "clock_events",
+    "kind", "spawn_instances", "clocked_in", "clock_active_since", "clock_events", "clock_adjust_seconds",
     "level", "label", "completed", "completed_at",
     "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
     "note", "threshold_upper", "threshold_lower", "manual_pass_fail", "requires_text_input", "captured_text_input", "result", "linked_process_path", "main_quest",
@@ -211,6 +212,7 @@ def save_process(proc: Process, file_path: Path) -> None:
             "clocked_in": proc.clocked_in,
             "clock_active_since": proc.clock_active_since,
             "clock_events": json.dumps(proc.clock_events),
+            "clock_adjust_seconds": proc.clock_adjust_seconds,
             "level": 0, "label": proc.name,
             "completed": proc.completed, "completed_at": proc.completed_at,
             "started": "", "started_at": "", "paused": "", "active_since": "", "duration_minutes": "", "duration_seconds": "",
@@ -274,6 +276,7 @@ def _load_csv(file_path: Path) -> Process:
         clocked_in=root.get("clocked_in", "false").lower() == "true",
         clock_active_since=root.get("clock_active_since", ""),
         clock_events=clock_events if isinstance(clock_events, list) else [],
+        clock_adjust_seconds=int(root.get("clock_adjust_seconds", "0") or "0"),
         completed=root.get("completed", "false").lower() == "true",
         completed_at=root.get("completed_at", ""),
     )
