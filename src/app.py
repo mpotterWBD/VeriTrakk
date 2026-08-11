@@ -1349,6 +1349,15 @@ class VeriTrakkApp(App):
     _build_move_mode: bool = False
     _build_move_source_idx: int | None = None
 
+    def _picker_start_dir(self) -> Path:
+        app_path = Path(__file__).resolve()
+        app_drive = Path(app_path.anchor) if app_path.anchor else app_path.parent
+        if app_drive.exists():
+            return app_drive
+        home = Path.home()
+        home_drive = Path(home.anchor) if home.anchor else home
+        return home_drive if home_drive.exists() else home
+
     # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1646,14 +1655,14 @@ class VeriTrakkApp(App):
         self._refresh_close_action_bar()
 
     def _open_picker(self) -> None:
-        start = Path.home()
+        start = self._picker_start_dir()
         self.push_screen(
             FilePickerScreen("open", start=start),
             callback=lambda path: self._load_process(path) if path else None,
         )
 
     def _build_picker(self) -> None:
-        start = Path.home()
+        start = self._picker_start_dir()
         self.push_screen(
             FilePickerScreen("open", start=start),
             callback=self._on_build_selected,
@@ -3348,7 +3357,7 @@ class VeriTrakkApp(App):
             self.notify("Select a task or sub task first.", severity="warning")
             return
 
-        root = Path.home()
+        root = self._picker_start_dir()
         self.push_screen(
             FilePickerScreen("open_prcss", start=root),
             callback=lambda path: self._on_link_process_selected(step_idx, path),
@@ -3428,7 +3437,7 @@ class VeriTrakkApp(App):
         if self._mode != "build" or not self._build_proc or self._build_proc.kind != "work_quest":
             return
         self.push_screen(
-            FilePickerScreen("open_wrkqst", start=Path.home()),
+            FilePickerScreen("open_wrkqst", start=self._picker_start_dir()),
             callback=self._on_carry_over_selected,
         )
 
