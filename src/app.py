@@ -2387,6 +2387,14 @@ class VeriTrakkApp(App):
         match = re.match(r"^.+?\[(?P<uid>[^\]]+)\]#.+$", stem)
         return match.group("uid").strip() if match else ""
 
+    def _append_return_context_status(self, t: Text) -> None:
+        if self._return_wq_path is None:
+            return
+        t.append("  | ", style="dim")
+        t.append("↩", style=_TEAL)
+        t.append(" Work Quest", style=f"bold {_KHAKI}")
+        t.append(f": {self._return_wq_path.name}", style=_BLUE)
+
     def _refresh_status(self) -> None:
         bar = self.query_one("#status_bar", Static)
         if self._mode == "run" and self._process:
@@ -2402,11 +2410,13 @@ class VeriTrakkApp(App):
                 t.append(self._format_minutes(proc.total_clock_minutes()), style=_TEAL)
                 t.append("  ", style="dim")
                 t.append("IN" if proc.clocked_in else "OUT", style=_GREEN if proc.clocked_in else _KHAKI)
+            self._append_return_context_status(t)
             bar.update(t)
         elif self._mode == "build" and self._build_proc:
             t = Text("  ")
             t.append("BUILDER", style=f"bold {_SALMON}")
             t.append(f"  {self._build_proc.name}", style=_KHAKI)
+            self._append_return_context_status(t)
             bar.update(t)
         else:
             bar.update("")
@@ -2569,6 +2579,35 @@ class VeriTrakkApp(App):
         self.notify("Clock in to modify work quest tasks.", severity="warning")
         return True
 
+    def on_key(self, event) -> None:
+        if event.key != "right":
+            return
+        if self._mode != "run" or not self._process or self._process.kind != "work_quest":
+            return
+        tree = self.query_one("#process_tree", Tree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            return
+        step_idx = node.data
+        step = self._process.steps[step_idx]
+        if self._process.has_children(step_idx) or step.completed:
+            return
+        if step.linked_process_path.strip():
+            linked_done, resolved_path = self._linked_process_status(step)
+            if resolved_path is not None and str(resolved_path) != step.linked_process_path:
+                step.linked_process_path = str(resolved_path)
+                save_process(self._process, self._proc_path)
+            if linked_done:
+                if self._auto_complete_linked_task(step_idx):
+                    self.notify("Linked process complete. Task auto-completed.", severity="information")
+                event.stop()
+                return
+            self._launch_linked_process_file(step_idx, resolved_path or Path(step.linked_process_path))
+            event.stop()
+            return
+        self.action_complete_step()
+        event.stop()
+
     def action_complete_step(self) -> None:
         if self._mode != "run" or not self._process:
             return
@@ -2594,15 +2633,10 @@ class VeriTrakkApp(App):
                 step.linked_process_path = str(resolved_path)
                 save_process(self._process, self._proc_path)
             if linked_done:
-                self.notify(
-                    "This task is linked and auto-completes when the linked process is done.",
-                    severity="information",
-                )
+                if self._auto_complete_linked_task(step_idx):
+                    self.notify("Linked process complete. Task auto-completed.", severity="information")
             else:
-                self.notify(
-                    "Complete the linked process first. This task auto-completes.",
-                    severity="warning",
-                )
+                self.action_run_linked_process()
             return
 
         # Work quest flow: first right starts, second right completes.
@@ -3044,9 +3078,8 @@ class VeriTrakkApp(App):
         self._clear_work_quest_return_context()
         self._open_process_file(target_path)
         if target_idx is not None:
-            if self._auto_complete_linked_task(target_idx):
-                self.notify("Linked process complete. Task auto-completed.", severity="information")
-            self._move_run_cursor_to(target_idx)
+            if not self._auto_complete_linked_task(target_idx):
+                self._move_run_cursor_to(target_idx)
 
     def _on_note_result(self, step_idx: int, notes_text: str | None) -> None:
         if notes_text is None:
@@ -3965,7 +3998,13 @@ class VeriTrakkApp(App):
 
     # ── Binding guards ────────────────────────────────────────────────────────
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        if isinstance(self.screen, (EditTimeChoiceScreen, EditTimeScreen)):
+        current_screen = None
+        try:
+            current_screen = self.screen
+        except Exception:
+            current_screen = None
+
+        if isinstance(current_screen, (EditTimeChoiceScreen, EditTimeScreen)):
             if action in (
                 "complete_step",
                 "uncomplete_step",
@@ -4022,7 +4061,7 @@ class VeriTrakkApp(App):
         if action == "run_linked_process":
             return self._current_linked_process_path() is not None
         if action == "back_to_work_quest":
-            return self._mode == "run" and self._return_wq_path is not None
+            return self._return_wq_path is not None and self._mode in ("run", "build")
         if action == "save_build":
             return self._mode == "build"
         return True
