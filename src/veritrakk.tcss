@@ -26,6 +26,17 @@ Footer {
     height: 1;
 }
 
+FooterKey.-complete-action {
+    .footer-key--key {
+        color: #8fbc8f;
+        text-style: bold;
+    }
+    .footer-key--description {
+        color: #8fbc8f;
+        text-style: bold;
+    }
+}
+
 #close_bar {
     height: 1;
     padding: 0 1;
@@ -454,7 +465,9 @@ CarrotsScreen {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 90;
+    width: 80%;
+    min-width: 60;
+    max-width: 110;
     height: auto;
     max-height: 90%;
 }
@@ -472,7 +485,9 @@ StepScreen #modal_box {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 90;
+    width: 80%;
+    min-width: 60;
+    max-width: 110;
     height: auto;
     max-height: 90%;
 }
@@ -481,7 +496,9 @@ StepScreen #modal_box {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 84;
+    width: 70%;
+    min-width: 50;
+    max-width: 100;
     height: auto;
     max-height: 90%;
 }
@@ -741,7 +758,9 @@ FilePickerScreen {
     background: #181818;
     border: double darkseagreen;
     padding: 1 2;
-    width: 70;
+    width: 80%;
+    min-width: 60;
+    max-width: 110;
     height: 80%;
 }
 
@@ -757,6 +776,17 @@ FilePickerScreen {
     color: #555;
     height: auto;
     padding-bottom: 1;
+}
+
+#fp_drives {
+    height: auto;
+    padding-bottom: 1;
+}
+
+#fp_drives Button {
+    min-width: 3;
+    height: 3;
+    margin-right: 1;
 }
 
 #fp_tree {

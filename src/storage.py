@@ -9,7 +9,6 @@ import csv
 import json
 import re
 import shutil
-import textwrap
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -26,9 +25,9 @@ def _rgb255(red: int, green: int, blue: int) -> tuple[float, float, float]:
 
 
 # PDF text color knobs. Change these three values to retune the exported PDF.
-PDF_NOTE_TEXT_COLOR = _rgb255(200, 70, 0)
-PDF_SUBTASK_TEXT_COLOR = _rgb255(0, 90, 210)
-PDF_SUBTASK_NOTE_TEXT_COLOR = _rgb255(160, 40, 190)
+PDF_NOTE_TEXT_COLOR = _rgb255(163, 66, 20)           # burnt sienna — top-level task notes
+PDF_SUBTASK_TEXT_COLOR = _rgb255(58, 90, 128)        # muted slate blue — subtask rows
+PDF_SUBTASK_NOTE_TEXT_COLOR = _rgb255(21, 116, 108)  # deep teal — subtask notes
 
 
 # ── Data Model ────────────────────────────────────────────────────────────────
@@ -489,6 +488,99 @@ def _pdf_stream_rect(x: float, y: float, width: float, height: float, *, fill_rg
     return "\n".join(parts)
 
 
+# Standard Helvetica / Helvetica-Bold glyph widths (AFM units per 1000 em) for
+# printable ASCII. Helvetica-Oblique shares the regular metrics. These let us
+# wrap and size text against the font's real widths instead of a fixed
+# characters-per-line guess, which is what let long labels/notes silently
+# overflow (and clip past) their container in the old layout.
+_HELV_WIDTHS: dict[str, int] = {
+    " ": 278, "!": 278, '"': 355, "#": 556, "$": 556, "%": 889, "&": 667, "'": 191,
+    "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333, ".": 278, "/": 278,
+    "0": 556, "1": 556, "2": 556, "3": 556, "4": 556, "5": 556, "6": 556, "7": 556,
+    "8": 556, "9": 556, ":": 278, ";": 278, "<": 584, "=": 584, ">": 584, "?": 556,
+    "@": 1015,
+    "A": 667, "B": 667, "C": 722, "D": 722, "E": 667, "F": 611, "G": 778, "H": 722,
+    "I": 278, "J": 500, "K": 667, "L": 556, "M": 833, "N": 722, "O": 778, "P": 667,
+    "Q": 778, "R": 722, "S": 667, "T": 611, "U": 722, "V": 667, "W": 944, "X": 667,
+    "Y": 667, "Z": 611,
+    "[": 278, "\\": 278, "]": 278, "^": 469, "_": 556, "`": 333,
+    "a": 556, "b": 556, "c": 500, "d": 556, "e": 556, "f": 278, "g": 556, "h": 556,
+    "i": 222, "j": 222, "k": 500, "l": 222, "m": 833, "n": 556, "o": 556, "p": 556,
+    "q": 556, "r": 333, "s": 500, "t": 278, "u": 556, "v": 500, "w": 722, "x": 500,
+    "y": 500, "z": 500,
+    "{": 334, "|": 260, "}": 334, "~": 584,
+}
+
+_HELV_BOLD_WIDTHS: dict[str, int] = {
+    " ": 278, "!": 333, '"': 474, "#": 556, "$": 556, "%": 889, "&": 722, "'": 238,
+    "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333, ".": 278, "/": 278,
+    "0": 556, "1": 556, "2": 556, "3": 556, "4": 556, "5": 556, "6": 556, "7": 556,
+    "8": 556, "9": 556, ":": 333, ";": 333, "<": 584, "=": 584, ">": 584, "?": 611,
+    "@": 975,
+    "A": 722, "B": 722, "C": 722, "D": 722, "E": 667, "F": 611, "G": 778, "H": 722,
+    "I": 278, "J": 556, "K": 722, "L": 611, "M": 833, "N": 722, "O": 778, "P": 667,
+    "Q": 778, "R": 722, "S": 667, "T": 611, "U": 722, "V": 667, "W": 944, "X": 667,
+    "Y": 667, "Z": 611,
+    "[": 333, "\\": 278, "]": 333, "^": 584, "_": 556, "`": 333,
+    "a": 556, "b": 611, "c": 556, "d": 611, "e": 556, "f": 333, "g": 611, "h": 611,
+    "i": 278, "j": 278, "k": 556, "l": 278, "m": 889, "n": 611, "o": 611, "p": 611,
+    "q": 611, "r": 389, "s": 556, "t": 333, "u": 611, "v": 556, "w": 778, "x": 556,
+    "y": 556, "z": 500,
+    "{": 389, "|": 280, "}": 389, "~": 584,
+}
+
+_DEFAULT_GLYPH_WIDTH = 556  # fallback for characters outside the tables above
+
+
+def _text_width(text: str, *, font: str, size: int) -> float:
+    table = _HELV_BOLD_WIDTHS if font == "F2" else _HELV_WIDTHS
+    return sum(table.get(ch, _DEFAULT_GLYPH_WIDTH) for ch in text) * size / 1000.0
+
+
+def _wrap_to_width(text: str, *, font: str, size: int, width: float, first_line_width: float | None = None) -> list[str]:
+    """Greedy word-wrap measured against real glyph widths, not a char count.
+
+    `first_line_width` lets the first line be narrower than the rest (used to
+    leave room for a status badge beside a wrapped title). A single token
+    wider than a whole line (a long unbroken identifier, say) is hard-broken
+    by character rather than left to run off the page edge.
+    """
+    words = text.split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    limit = first_line_width if first_line_width is not None else width
+
+    def fits(s: str) -> bool:
+        return _text_width(s, font=font, size=size) <= limit
+
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if fits(candidate):
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+            limit = width
+        if fits(word):
+            current = word
+            continue
+        chunk = ""
+        for ch in word:
+            piece = chunk + ch
+            if chunk and not fits(piece):
+                lines.append(chunk)
+                limit = width
+                chunk = ch
+            else:
+                chunk = piece
+        current = chunk
+    lines.append(current)
+    return lines
+
+
 def _build_pdf_document(page_streams: list[str]) -> bytes:
     objects: list[bytes] = []
 
@@ -497,9 +589,13 @@ def _build_pdf_document(page_streams: list[str]) -> bytes:
         objects.append(data)
         return len(objects)
 
-    font_regular = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-    font_bold = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
-    font_oblique = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>")
+    # WinAnsiEncoding matches Latin-1 for the byte range this module writes
+    # (content streams are encoded as latin-1), so non-ASCII marks like the
+    # middle dot used as a separator render as the intended glyph rather than
+    # whatever falls at that byte in each font's default StandardEncoding.
+    font_regular = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    font_bold = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+    font_oblique = add_object("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>")
 
     page_ids: list[int] = []
     content_ids: list[int] = []
@@ -552,6 +648,14 @@ def _build_pdf_document(page_streams: list[str]) -> bytes:
 
 
 def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) -> bytes:
+    """A log is only ever generated for an already-#COMPLETE process/quest, and
+    completion syncs top-down (a parent can't be complete unless every one of
+    its descendants is), so "COMPLETE"/"DONE" status is true of every row by
+    construction — printing it everywhere just repeats the obvious. Status is
+    only surfaced when it says something *other* than that (FAIL, or an
+    unexpected still-open item), which is also the only case worth a visual
+    flag. That's why plain-complete rows carry no badge/tag at all below.
+    """
     published_dt = published_at or datetime.now()
     published_text = published_dt.strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
     is_wq = proc.kind == "work_quest"
@@ -563,9 +667,26 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
     page_height = 792.0
     margin = 48.0
     content_width = page_width - margin * 2
+    indent_step = 13.0
+
     note_color = PDF_NOTE_TEXT_COLOR
     subtask_color = PDF_SUBTASK_TEXT_COLOR
     subtask_note_color = PDF_SUBTASK_NOTE_TEXT_COLOR
+
+    color_title = (0.09, 0.11, 0.15)
+    color_meta  = (0.40, 0.43, 0.47)
+    color_good    = (0.13, 0.52, 0.32)
+    color_bad     = (0.76, 0.20, 0.18)
+    color_pending = (0.72, 0.57, 0.05)
+    color_rule  = (0.85, 0.85, 0.83)
+
+    def status_rgb(text: str) -> tuple[float, float, float]:
+        if text in ("PASS", "COMPLETE", "DONE"):
+            return color_good
+        if text == "FAIL":
+            return color_bad
+        return color_pending
+
     pages: list[list[str]] = [[]]
     cursor_top = margin
 
@@ -579,62 +700,86 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
         if cursor_top + height > page_height - margin:
             new_page()
 
-    def draw_rect(top: float, height: float, *, fill_rgb: tuple[float, float, float] | None = None, stroke_rgb: tuple[float, float, float] | None = None, x: float = margin, width: float = content_width, line_width: float = 1.0) -> None:
+    def draw_rect(top: float, height: float, *, fill_rgb: tuple[float, float, float] | None = None, x: float = margin, width: float = content_width) -> None:
         y = page_height - top - height
-        pages[-1].append(
-            _pdf_stream_rect(x, y, width, height, fill_rgb=fill_rgb, stroke_rgb=stroke_rgb, line_width=line_width)
-        )
+        pages[-1].append(_pdf_stream_rect(x, y, width, height, fill_rgb=fill_rgb))
 
-    def draw_text(top: float, text: str, *, size: int = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin) -> None:
+    def draw_text(top: float, text: str, *, size: float = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin) -> None:
         baseline = page_height - top - size
         pages[-1].append(_pdf_stream_text(x, baseline, text, font=font, size=size, rgb=rgb))
 
-    def write_lines(lines: list[str], *, size: int = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin, line_gap: float = 4.0) -> None:
+    def draw_hr(top: float) -> None:
+        draw_rect(top, 0.75, fill_rgb=color_rule)
+
+    def write_wrapped(text: str, *, x: float, width: float, size: float, font: str, rgb: tuple[float, float, float], line_h: float, first_line_width: float | None = None) -> None:
         nonlocal cursor_top
-        step = size + line_gap
-        ensure_space(len(lines) * step)
+        lines = _wrap_to_width(text, font=font, size=size, width=width, first_line_width=first_line_width)
+        ensure_space(len(lines) * line_h)
         for line in lines:
             draw_text(cursor_top, line, size=size, font=font, rgb=rgb, x=x)
-            cursor_top += step
+            cursor_top += line_h
 
-    def write_wrapped(text: str, *, prefix: str = "", size: int = 11, font: str = "F1", rgb: tuple[float, float, float] = (0.12, 0.13, 0.17), x: float = margin, width_chars: int = 78, line_gap: float = 4.0) -> None:
-        lines: list[str] = []
-        source_lines = text.splitlines() or [""]
-        for raw in source_lines:
-            wrapped = textwrap.wrap(raw, width=width_chars, subsequent_indent=" " * len(prefix)) or [""]
-            if prefix:
-                wrapped[0] = prefix + wrapped[0]
-                prefix = " " * len(prefix)
-            lines.extend(wrapped)
-        write_lines(lines, size=size, font=font, rgb=rgb, x=x, line_gap=line_gap)
+    def write_note(text: str, *, x: float, width: float, size: float, font: str, rgb: tuple[float, float, float], line_h: float, label: str) -> None:
+        nonlocal cursor_top
+        label_w = _text_width(label, font=font, size=size)
+        for raw in text.splitlines() or [text]:
+            lines = _wrap_to_width(raw, font=font, size=size, width=width - label_w)
+            ensure_space(len(lines) * line_h)
+            for idx, line in enumerate(lines):
+                if idx == 0:
+                    draw_text(cursor_top, label + line, size=size, font=font, rgb=rgb, x=x)
+                else:
+                    draw_text(cursor_top, line, size=size, font=font, rgb=rgb, x=x + label_w)
+                cursor_top += line_h
 
-    ensure_space(96)
-    draw_rect(cursor_top, 72, fill_rgb=(0.13, 0.34, 0.46))
-    draw_text(cursor_top + 14, "VERITRAKK", size=13, font="F2", rgb=(0.86, 0.92, 0.95), x=margin + 18)
-    draw_text(cursor_top + 34, title, size=24, font="F2", rgb=(1.0, 1.0, 1.0), x=margin + 18)
-    draw_text(cursor_top + 58, f"Published {published_text}", size=10, font="F3", rgb=(0.86, 0.92, 0.95), x=margin + 18)
-    cursor_top += 88
+    def write_subtask_line(text: str, *, x: float, width: float, size: float, tag: str, tag_rgb: tuple[float, float, float]) -> None:
+        # Like write_note, but the leading "tag" (if any) is bold and colored
+        # by status while the rest of the (hanging-indented) line stays in
+        # the plain subtask color — a plain "DONE" tag is simply omitted.
+        nonlocal cursor_top
+        tag_w = _text_width(tag, font="F2", size=size) if tag else 0.0
+        lines = _wrap_to_width(text, font="F1", size=size, width=width - tag_w)
+        ensure_space(len(lines) * 13.0)
+        for idx, line in enumerate(lines):
+            lx = x + tag_w if tag else x
+            if idx == 0 and tag:
+                draw_text(cursor_top, tag, size=size, font="F2", rgb=tag_rgb, x=x)
+            draw_text(cursor_top, line, size=size, font="F1", rgb=subtask_color, x=lx)
+            cursor_top += 13.0
 
-    meta_height = 112 if proc.completed_at else 94
-    ensure_space(meta_height + 12)
-    draw_rect(cursor_top, meta_height, fill_rgb=(0.96, 0.96, 0.95), stroke_rgb=(0.84, 0.84, 0.82))
-    meta_lines = [
+    # ---- Header banner (single compact band) --------------------------------
+    ensure_space(52)
+    draw_rect(cursor_top, 38, fill_rgb=(0.11, 0.30, 0.42))
+    draw_text(cursor_top + 12, f"VERITRAKK  ·  {title}", size=12, font="F2", rgb=(1.0, 1.0, 1.0), x=margin + 12)
+    draw_text(cursor_top + 27, f"Published {published_text}", size=8, font="F3", rgb=(0.80, 0.88, 0.93), x=margin + 12)
+    cursor_top += 50
+
+    # ---- Summary (one dense line + progress bar, no boxed card) -------------
+    pct = proc.progress_pct
+    summary_parts = [
         f"{subject}: {proc.name}",
-        f"Top-level tasks completed: {proc.done_top} / {proc.total_top}",
-        f"Recorded time: {_hours_text(total_minutes)} ({total_minutes} min)",
+        f"{proc.done_top}/{proc.total_top} tasks ({pct:.0f}%)",
+        f"{_hours_text(total_minutes)} ({total_minutes} min) recorded",
     ]
     if proc.completed_at:
-        meta_lines.append(f"Completed: {_format_log_timestamp(proc.completed_at)}")
+        summary_parts.append(f"completed {_format_log_timestamp(proc.completed_at)}")
     if proc.clock_events:
-        meta_lines.append(f"Clock events captured: {len(proc.clock_events)}")
-    draw_text(cursor_top + 14, "Summary", size=13, font="F2", rgb=(0.16, 0.20, 0.24), x=margin + 16)
-    y_meta = cursor_top + 38
-    for line in meta_lines:
-        draw_text(y_meta, line, size=11, font="F1", rgb=(0.18, 0.20, 0.23), x=margin + 16)
-        y_meta += 18
-    cursor_top += meta_height + 18
+        summary_parts.append(f"{len(proc.clock_events)} clock events")
+    write_wrapped("  ·  ".join(summary_parts), x=margin, width=content_width, size=10, font="F1", rgb=(0.16, 0.18, 0.21), line_h=14)
 
+    cursor_top += 5.0
+    bar_h = 6.0
+    ensure_space(bar_h + 14.0)
+    draw_rect(cursor_top, bar_h, fill_rgb=(0.88, 0.88, 0.86))
+    if pct > 0:
+        draw_rect(cursor_top, bar_h, fill_rgb=color_good, width=content_width * min(pct, 100.0) / 100.0)
+    cursor_top += bar_h + 14.0
+    draw_hr(cursor_top)
+    cursor_top += 16.0
+
+    # ---- Task sections (flowing text, divider rules — no per-task boxes) ---
     i = 0
+    first_section = True
     while i < len(proc.steps):
         step = proc.steps[i]
         if step.level != 1:
@@ -643,85 +788,80 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
 
         descendants = proc.descendants_of(i)
 
-        block_lines = 4
-        if is_wq:
-            block_lines += 1
-        if step.threshold_upper or step.threshold_lower:
-            block_lines += 1
-        if step.note:
-            note_lines = sum(
-                max(1, len(textwrap.wrap(line, width=68)))
-                for line in step.note.splitlines() or [step.note]
-            )
-            block_lines += note_lines
-        for _, sub in descendants:
-            block_lines += 1
-            if sub.note:
-                block_lines += sum(
-                    max(1, len(textwrap.wrap(line, width=62)))
-                    for line in sub.note.splitlines() or [sub.note]
-                )
-        block_height = 26 + block_lines * 16
-        ensure_space(block_height + 12)
-        draw_rect(cursor_top, block_height, fill_rgb=(0.995, 0.995, 0.99), stroke_rgb=(0.87, 0.87, 0.84))
+        # Reserve the divider + heading together so a page break can't strand
+        # a lone rule at the bottom of one page with the heading on the next.
+        ensure_space((14.0 if not first_section else 0.0) + 42.0)
+        if not first_section:
+            draw_hr(cursor_top)
+            cursor_top += 14.0
+        first_section = False
 
         status = step.result or ("COMPLETE" if step.completed else "PENDING")
-        status_color = (0.18, 0.53, 0.34) if status in ("PASS", "COMPLETE") else (0.74, 0.20, 0.18) if status == "FAIL" else (0.66, 0.50, 0.12)
-        draw_text(cursor_top + 14, step.label, size=14, font="F2", rgb=(0.12, 0.15, 0.17), x=margin + 16)
-        draw_text(cursor_top + 15, status, size=10, font="F2", rgb=status_color, x=margin + content_width - 92)
+        show_badge = status != "COMPLETE"
+        badge_w = _text_width(status, font="F2", size=8) + 12.0 if show_badge else 0.0
+        title_lines = _wrap_to_width(step.label, font="F2", size=13, width=content_width, first_line_width=content_width - badge_w - (10.0 if show_badge else 0.0))
+        ensure_space(len(title_lines) * 16.0)
+        if show_badge:
+            badge_rgb = status_rgb(status)
+            draw_rect(cursor_top + 1.0, 13.0, fill_rgb=badge_rgb, x=margin + content_width - badge_w, width=badge_w)
+            draw_text(cursor_top + 4.0, status, size=8, font="F2", rgb=(1.0, 1.0, 1.0), x=margin + content_width - badge_w + 6.0)
+        for line in title_lines:
+            draw_text(cursor_top, line, size=13, font="F2", rgb=color_title, x=margin)
+            cursor_top += 16.0
 
-        block_top = cursor_top + 38
-        details = [f"Status: {status}"]
+        meta_parts = []
         if step.completed_at:
-            details.append(f"Completed: {_format_log_timestamp(step.completed_at)}")
+            meta_parts.append(f"Completed {_format_log_timestamp(step.completed_at)}")
         elif step.started_at:
-            details.append(f"Started: {_format_log_timestamp(step.started_at)}")
+            meta_parts.append(f"Started {_format_log_timestamp(step.started_at)}")
         if is_wq or step.duration_minutes:
-            details.append(f"Step time: {_hours_text(step.duration_minutes)} ({step.duration_minutes} min)")
+            meta_parts.append(f"{_hours_text(step.duration_minutes)} ({step.duration_minutes} min)")
         if step.threshold_upper or step.threshold_lower:
             threshold_parts: list[str] = []
             if step.threshold_upper:
-                threshold_parts.append(f"Upper <= {step.threshold_upper}")
+                threshold_parts.append(f"upper <= {step.threshold_upper}")
             if step.threshold_lower:
-                threshold_parts.append(f"Lower >= {step.threshold_lower}")
-            details.append("Thresholds: " + " | ".join(threshold_parts))
-        for line in details:
-            draw_text(block_top, line, size=11, font="F1", rgb=(0.22, 0.24, 0.27), x=margin + 16)
-            block_top += 16
+                threshold_parts.append(f"lower >= {step.threshold_lower}")
+            meta_parts.append(" / ".join(threshold_parts))
+        if meta_parts:
+            write_wrapped("  ·  ".join(meta_parts), x=margin, width=content_width, size=9.5, font="F1", rgb=color_meta, line_h=13)
 
         if step.note:
-            cursor_snapshot = cursor_top
-            cursor_top = block_top
-            write_wrapped(step.note, prefix="Note: ", size=10, font="F2", rgb=note_color, x=margin + 16, width_chars=70, line_gap=3)
-            block_top = cursor_top
-            cursor_top = cursor_snapshot
+            cursor_top += 2.0
+            write_note(step.note, x=margin, width=content_width, size=9.5, font="F3", rgb=note_color, line_h=12.5, label="note: ")
 
         if descendants:
-            draw_text(block_top + 2, "Subtasks", size=11, font="F2", rgb=subtask_color, x=margin + 16)
-            block_top += 18
-            cursor_snapshot = cursor_top
-            cursor_top = block_top
+            cursor_top += 5.0
             for _, sub in descendants:
-                sub_status = sub.result or ("DONE" if sub.completed else "OPEN")
-                indent = "  " * max(0, sub.level - step.level - 1)
-                sub_line = f"{indent}- [{sub_status}] {sub.label}"
-                if sub.completed_at:
-                    sub_line += f"  |  {_format_log_timestamp(sub.completed_at)}"
-                if is_wq or sub.duration_minutes:
-                    sub_line += f"  |  {_hours_text(sub.duration_minutes)} ({sub.duration_minutes} min)"
-                write_wrapped(sub_line, size=10, font="F2", rgb=subtask_color, x=margin + 28, width_chars=66, line_gap=3)
-                if sub.note:
-                    write_wrapped(sub.note, prefix="  note: ", size=9, font="F2", rgb=subtask_note_color, x=margin + 40, width_chars=60, line_gap=3)
-            block_top = cursor_top
-            cursor_top = cursor_snapshot
+                sub_indent = indent_step * max(0, sub.level - step.level - 1)
+                sub_x = margin + 12.0 + sub_indent
+                sub_width = content_width - 12.0 - sub_indent
 
-        cursor_top += block_height + 12
+                sub_status = sub.result or ("DONE" if sub.completed else "OPEN")
+                rest = sub.label
+                if sub.completed_at:
+                    rest += f"  ·  {_format_log_timestamp(sub.completed_at)}"
+                if is_wq or sub.duration_minutes:
+                    rest += f"  ·  {_hours_text(sub.duration_minutes)} ({sub.duration_minutes} min)"
+
+                cursor_top += 2.0
+                tag = "" if sub_status == "DONE" else f"{sub_status}  "
+                write_subtask_line(rest, x=sub_x, width=sub_width, size=9.5, tag=tag, tag_rgb=status_rgb(sub_status))
+
+                if sub.note:
+                    write_note(sub.note, x=sub_x + 10.0, width=sub_width - 10.0, size=8.5, font="F3", rgb=subtask_note_color, line_h=11, label="")
+
+        cursor_top += 12.0
         i = proc.subtree_end_exclusive(i)
 
-    ensure_space(44)
-    draw_rect(cursor_top, 32, fill_rgb=(0.95, 0.96, 0.97))
-    footer = f"Completion summary: {proc.done_top}/{proc.total_top} top-level tasks complete"
-    draw_text(cursor_top + 10, footer, size=10, font="F2", rgb=(0.16, 0.20, 0.24), x=margin + 14)
+    ensure_space(30.0)
+    draw_hr(cursor_top)
+    cursor_top += 14.0
+    draw_text(cursor_top, f"Completion summary: {proc.done_top}/{proc.total_top} top-level tasks complete", size=10, font="F2", rgb=(0.16, 0.20, 0.24), x=margin)
+
+    total_pages = len(pages)
+    for idx, page in enumerate(pages, start=1):
+        page.append(_pdf_stream_text(margin, 26.0, f"VeriTrakk  ·  Page {idx} of {total_pages}", font="F1", size=8, rgb=(0.55, 0.55, 0.55)))
 
     return _build_pdf_document(["\n".join(page) for page in pages if page])
 

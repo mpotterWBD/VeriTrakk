@@ -360,6 +360,211 @@ class TestBindingGuards:
         assert app._format_seconds(-1) == "00:00:00"
 
 
+# ── Work quest completion no longer auto-fires on the last task ─────────────
+
+class TestDoCompleteAutoCompletion:
+    def _stub_ui(self, app, monkeypatch):
+        monkeypatch.setattr(app, "_rebuild_proc_tree", lambda: None)
+        monkeypatch.setattr(app, "_refresh_run_sidebar", lambda: None)
+        monkeypatch.setattr(app, "_refresh_status", lambda: None)
+        monkeypatch.setattr(app, "_update_step_info", lambda: None)
+        monkeypatch.setattr(app, "_move_run_cursor_to", lambda idx: None)
+        monkeypatch.setattr(app, "refresh_bindings", lambda: None)
+
+    def test_work_quest_does_not_auto_complete_on_last_step(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        path = tmp_path / "WQ.wrkqst"
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="Only", level=1, started=True)])
+        save_process(proc, path)
+        app._process  = proc
+        app._proc_path = path
+
+        app._do_complete(0)
+
+        assert proc.steps[0].completed is True
+        assert proc.completed is False
+        assert app._proc_path == path  # not renamed to #COMPLETE
+
+    def test_process_still_auto_completes_on_last_step(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        path = tmp_path / "P.prcss"
+        proc = Process(name="P", kind="process", steps=[Step(label="Only", level=1)])
+        save_process(proc, path)
+        app._process  = proc
+        app._proc_path = path
+
+        app._do_complete(0)
+
+        assert proc.completed is True
+        assert app._proc_path == tmp_path / "P#COMPLETE.prcss"
+        assert app._proc_path.exists()
+
+
+# ── check_action("complete_work_quest", ...) ─────────────────────────────────
+
+class TestCheckActionCompleteWorkQuest:
+    def _wq(self, *, completed_steps):
+        return Process(
+            name="WQ",
+            kind="work_quest",
+            steps=[Step(label=f"T{i}", level=1, completed=done) for i, done in enumerate(completed_steps)],
+        )
+
+    def test_hidden_when_not_in_run_mode(self, app):
+        app._mode = "build"
+        app._process = self._wq(completed_steps=[True])
+        assert app.check_action("complete_work_quest", ()) is False
+
+    def test_hidden_for_process_kind_even_if_fully_complete(self, app):
+        app._mode = "run"
+        app._process = Process(name="P", kind="process", steps=[Step(label="T", level=1, completed=True)])
+        assert app.check_action("complete_work_quest", ()) is False
+
+    def test_hidden_while_tasks_remain_incomplete(self, app):
+        app._mode = "run"
+        app._process = self._wq(completed_steps=[True, False])
+        assert app.check_action("complete_work_quest", ()) is False
+
+    def test_visible_once_all_tasks_complete(self, app):
+        app._mode = "run"
+        app._process = self._wq(completed_steps=[True, True])
+        assert app.check_action("complete_work_quest", ()) is True
+
+    def test_hidden_once_already_completed(self, app):
+        app._mode = "run"
+        proc = self._wq(completed_steps=[True, True])
+        proc.completed = True
+        app._process = proc
+        assert app.check_action("complete_work_quest", ()) is False
+
+
+# ── action_complete_work_quest ───────────────────────────────────────────────
+
+class TestActionCompleteWorkQuest:
+    def _stub_ui(self, app, monkeypatch):
+        monkeypatch.setattr(app, "query_one", lambda *a, **kw: SimpleNamespace())
+        monkeypatch.setattr(app, "notify", lambda *a, **kw: None)
+        monkeypatch.setattr(app, "_rebuild_proc_tree", lambda: None)
+        monkeypatch.setattr(app, "_refresh_run_sidebar", lambda: None)
+        monkeypatch.setattr(app, "_refresh_status", lambda: None)
+        monkeypatch.setattr(app, "refresh_bindings", lambda: None)
+
+    def test_marks_work_quest_complete_and_renames_file(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        path = tmp_path / "WQ.wrkqst"
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=True)])
+        save_process(proc, path)
+        app._mode = "run"
+        app._process  = proc
+        app._proc_path = path
+
+        app.action_complete_work_quest()
+
+        assert proc.completed is True
+        assert proc.completed_at != ""
+        assert app._proc_path == tmp_path / "WQ#COMPLETE.wrkqst"
+        assert app._proc_path.exists()
+
+    def test_no_op_when_not_fully_complete(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        path = tmp_path / "WQ.wrkqst"
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=False)])
+        save_process(proc, path)
+        app._mode = "run"
+        app._process  = proc
+        app._proc_path = path
+
+        app.action_complete_work_quest()
+
+        assert proc.completed is False
+        assert app._proc_path == path
+
+    def test_no_op_when_already_completed(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        path = tmp_path / "WQ#COMPLETE.wrkqst"
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=True)])
+        proc.completed = True
+        save_process(proc, path)
+        app._mode = "run"
+        app._process  = proc
+        app._proc_path = path
+
+        app.action_complete_work_quest()
+
+        assert app._proc_path == path
+
+    def test_no_op_outside_run_mode(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        path = tmp_path / "WQ.wrkqst"
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=True)])
+        save_process(proc, path)
+        app._mode = "build"
+        app._process  = proc
+        app._proc_path = path
+
+        app.action_complete_work_quest()
+
+        assert proc.completed is False
+        assert app._proc_path == path
+
+
+# ── Reconciling stale `.completed` against the #COMPLETE marker on open ─────
+
+class TestReconcileWorkQuestCompletion:
+    def test_clears_completed_flag_when_filename_lacks_marker(self, app, tmp_path):
+        # Regression: real quest files can carry `.completed = True` from
+        # before the marker convention (or a rename outside the app) without
+        # the filename ever getting "#COMPLETE" — the stored flag used to be
+        # trusted as-is, hiding "Complete Work Quest" even though the file
+        # was never actually finalized.
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=True)])
+        proc.completed = True
+        proc.completed_at = "2026-01-01T00:00:00"
+        app._process = proc
+
+        app._reconcile_work_quest_completion(tmp_path / "WQ.wrkqst")
+
+        assert proc.completed is False
+        assert proc.completed_at == ""
+
+    def test_sets_completed_flag_when_filename_has_marker(self, app, tmp_path):
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=True)])
+        proc.completed = False
+        app._process = proc
+
+        app._reconcile_work_quest_completion(tmp_path / "WQ#COMPLETE.wrkqst")
+
+        assert proc.completed is True
+
+
+class TestOpenProcessFileReconciliation:
+    def _stub_ui(self, app, monkeypatch):
+        monkeypatch.setattr(app, "_show_run", lambda: None)
+        monkeypatch.setattr("src.app.save_session", lambda *a, **kw: None)
+
+    def test_reconciles_work_quest_completion_on_open(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        proc = Process(name="WQ", kind="work_quest", steps=[Step(label="T", level=1, completed=True)])
+        proc.completed = True
+        path = tmp_path / "WQ.wrkqst"
+        save_process(proc, path)
+
+        app._open_process_file(path)
+
+        assert app._process.completed is False
+
+    def test_does_not_reconcile_process_kind(self, app, monkeypatch, tmp_path):
+        self._stub_ui(app, monkeypatch)
+        proc = Process(name="P", kind="process", steps=[Step(label="T", level=1, completed=True)])
+        proc.completed = True
+        path = tmp_path / "P.prcss"
+        save_process(proc, path)
+
+        app._open_process_file(path)
+
+        assert app._process.completed is True
+
+
 # ── Threshold pass/fail logic (_on_threshold_result) ─────────────────────────
 
 class TestOnThresholdResult:
@@ -548,6 +753,111 @@ class TestMergeForestByParentName:
         incoming = app._steps_to_forest([Step(label="Task", level=1)])
         app._merge_forest_by_parent_name(destination, incoming)
         assert len(destination) == 2
+
+
+# ── _sync_complete_marker ────────────────────────────────────────────────────
+
+class TestSyncCompleteMarker:
+    def test_adds_marker_and_renames_when_completed(self, app, tmp_path):
+        path = tmp_path / "Weekly.wrkqst"
+        path.write_text("placeholder", encoding="utf-8")
+
+        result = app._sync_complete_marker(path, True)
+
+        assert result == tmp_path / "Weekly#COMPLETE.wrkqst"
+        assert result.exists()
+        assert not path.exists()
+
+    def test_removes_marker_and_renames_when_not_completed(self, app, tmp_path):
+        path = tmp_path / "Weekly#COMPLETE.wrkqst"
+        path.write_text("placeholder", encoding="utf-8")
+
+        result = app._sync_complete_marker(path, False)
+
+        assert result == tmp_path / "Weekly.wrkqst"
+        assert result.exists()
+        assert not path.exists()
+
+    def test_no_op_when_marker_already_matches_state(self, app, tmp_path):
+        completed_path = tmp_path / "Weekly#COMPLETE.wrkqst"
+        completed_path.write_text("placeholder", encoding="utf-8")
+        incomplete_path = tmp_path / "Other.wrkqst"
+        incomplete_path.write_text("placeholder", encoding="utf-8")
+
+        assert app._sync_complete_marker(completed_path, True) == completed_path
+        assert app._sync_complete_marker(incomplete_path, False) == incomplete_path
+
+
+# ── _on_carry_over_selected ──────────────────────────────────────────────────
+
+class TestOnCarryOverSelected:
+    def _wq(self, name: str, steps: list[Step]) -> Process:
+        return Process(name=name, kind="work_quest", steps=steps)
+
+    def _stub_ui(self, app, monkeypatch):
+        monkeypatch.setattr(app, "query_one", lambda *a, **kw: SimpleNamespace(focus=lambda: None))
+        monkeypatch.setattr(app, "notify", lambda *a, **kw: None)
+        monkeypatch.setattr(app, "_rebuild_builder_tree", lambda: None)
+        monkeypatch.setattr(app, "_update_build_file_label", lambda: None)
+        monkeypatch.setattr(app, "_move_builder_cursor_to", lambda *a, **kw: None)
+
+    def test_source_work_quest_gets_marked_complete_on_disk_when_last_task_carried_over(
+        self, app, monkeypatch, tmp_path
+    ):
+        # Regression test: carrying over the last unfinished task used to leave
+        # `.completed` set True in the JSON without renaming the file to add
+        # "#COMPLETE", so the finished work quest never showed as complete
+        # until a task was uncompleted/completed again through the run flow.
+        self._stub_ui(app, monkeypatch)
+
+        source_path = tmp_path / "Source.wrkqst"
+        source_proc = self._wq(
+            "Source",
+            [Step(label="Done", level=1, completed=True), Step(label="Not Done", level=1)],
+        )
+        save_process(source_proc, source_path)
+
+        dest_path = tmp_path / "Dest.wrkqst"
+        dest_proc = self._wq("Dest", [Step(label="Existing", level=1, completed=True)])
+        save_process(dest_proc, dest_path)
+
+        app._mode = "build"
+        app._build_proc = source_proc
+        app._build_path = source_path
+
+        app._on_carry_over_selected(dest_path)
+
+        assert app._build_path == tmp_path / "Source#COMPLETE.wrkqst"
+        assert app._build_path.exists()
+        assert not source_path.exists()
+        assert app._build_proc.completed is True
+
+    def test_destination_work_quest_marker_removed_when_it_receives_unfinished_tasks(
+        self, app, monkeypatch, tmp_path
+    ):
+        self._stub_ui(app, monkeypatch)
+
+        source_path = tmp_path / "Source.wrkqst"
+        source_proc = self._wq("Source", [Step(label="Not Done", level=1)])
+        save_process(source_proc, source_path)
+
+        # Destination was previously completed, so its file already carries
+        # the "#COMPLETE" marker; carrying an unfinished task into it should
+        # strip the marker back off.
+        dest_path = tmp_path / "Dest#COMPLETE.wrkqst"
+        dest_proc = self._wq("Dest", [Step(label="Existing", level=1, completed=True)])
+        dest_proc.completed = True
+        save_process(dest_proc, dest_path)
+
+        app._mode = "build"
+        app._build_proc = source_proc
+        app._build_path = source_path
+
+        app._on_carry_over_selected(dest_path)
+
+        renamed_dest = tmp_path / "Dest.wrkqst"
+        assert renamed_dest.exists()
+        assert not dest_path.exists()
 
 
 # ── _root_template_path ──────────────────────────────────────────────────────

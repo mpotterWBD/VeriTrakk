@@ -618,6 +618,56 @@ class TestGenerateLogPdfBytes:
         pdf_bytes = generate_log_pdf_bytes(proc, datetime(2026, 1, 1))
         assert pdf_bytes.startswith(b"%PDF-1.4")
 
+    def test_long_subtask_label_and_note_do_not_crash_or_produce_invalid_pdf(self):
+        # Regression: long subtask text used to overflow (clip past) its
+        # container because the box height was pre-guessed with a different
+        # wrap width than what actually got rendered.
+        proc = Process(
+            name="Proc",
+            kind="work_quest",
+            steps=[
+                Step(label="Parent", level=1, completed=True),
+                Step(
+                    label="A very long subtask label " * 6,
+                    level=2, completed=True, completed_at="2026-01-01T00:00:00", duration_minutes=45,
+                    note="A very long subtask note that should wrap several times. " * 4,
+                ),
+            ],
+        )
+        pdf_bytes = generate_log_pdf_bytes(proc, datetime(2026, 1, 1))
+        assert pdf_bytes.startswith(b"%PDF-1.4")
+        assert pdf_bytes.rstrip().endswith(b"%%EOF")
+
+
+# ── PDF text wrapping (_wrap_to_width) ───────────────────────────────────────
+
+class TestWrapToWidth:
+    def test_wraps_within_width(self):
+        text = "This is a fairly long sentence that should wrap across a few lines without exceeding the given width."
+        lines = storage._wrap_to_width(text, font="F1", size=10, width=150)
+        assert len(lines) > 1
+        for line in lines:
+            assert storage._text_width(line, font="F1", size=10) <= 150 + 1e-6
+
+    def test_first_line_width_only_constrains_first_line(self):
+        text = "alpha beta gamma delta epsilon zeta"
+        lines = storage._wrap_to_width(text, font="F1", size=10, width=200, first_line_width=50)
+        assert storage._text_width(lines[0], font="F1", size=10) <= 50 + 1e-6
+        assert len(lines) > 1
+
+    def test_hard_breaks_a_single_token_wider_than_the_line(self):
+        # A run without spaces (e.g. a long identifier) must not be left to
+        # run off the page edge — it gets split by character instead.
+        text = "x" * 100
+        lines = storage._wrap_to_width(text, font="F1", size=10, width=60)
+        assert len(lines) > 1
+        for line in lines:
+            assert storage._text_width(line, font="F1", size=10) <= 60 + 1e-6
+        assert "".join(lines) == text
+
+    def test_empty_text_returns_single_empty_line(self):
+        assert storage._wrap_to_width("", font="F1", size=10, width=100) == [""]
+
 
 # ── publish_process orchestration ────────────────────────────────────────────
 

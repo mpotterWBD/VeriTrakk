@@ -6,8 +6,10 @@ toolbar-driven navigation, and CSV-backed data model.
 from __future__ import annotations
 
 import copy
+import os
 import random
 import re
+import string
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -21,6 +23,9 @@ from textual.widgets import (
     Button, ContentSwitcher, DirectoryTree, Footer, Header,
     Digits, Input, Label, Log, Markdown, Static, Switch, Tree,
 )
+# Footer exposes no per-binding styling hook, so FooterKey (private) is
+# used to tag the "Complete Work Quest" key for its own CSS class.
+from textual.widgets._footer import FooterKey
 
 from .storage import (
     DATA_DIR, LOGS_DIR, Process, Step,
@@ -215,13 +220,24 @@ def _builder_label(step: Step, *, number_prefix: str = "") -> Text:
 # ── Specialized DirectoryTree subclasses ──────────────────────────────────────
 
 class ProcessFileTree(DirectoryTree):
-    """Shows directories and active process/work quest files."""
+    """Shows directories, active process files, and work quests (complete or not)."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [
             p for p in paths
-            if p.is_dir() or (
-                p.suffix in (".prcss", ".wrkqst") and "#COMPLETE" not in p.name
-            )
+            if p.is_dir()
+            or (p.suffix == ".prcss" and "#COMPLETE" not in p.name)
+            or p.suffix == ".wrkqst"
+        ]
+
+
+class OpenFileTree(DirectoryTree):
+    """Shows directories, active process files, work quests (complete or not), and work quest logs."""
+    def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
+        return [
+            p for p in paths
+            if p.is_dir()
+            or (p.suffix == ".prcss" and "#COMPLETE" not in p.name)
+            or p.suffix in (".wrkqst", ".wrkqstlog")
         ]
 
 
@@ -258,6 +274,14 @@ class DirOnlyTree(DirectoryTree):
     """Shows only directories (for picking a save location)."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [p for p in paths if p.is_dir()]
+
+
+def available_drives() -> list[Path]:
+    """Existing drive roots (Windows) so the file picker can jump between them."""
+    if os.name == "nt":
+        drives = [Path(f"{letter}:\\") for letter in string.ascii_uppercase]
+        return [d for d in drives if d.exists()]
+    return [p for p in (Path("/"),) if p.exists()]
 
 
 # ── Modal Screens ─────────────────────────────────────────────────────────────
@@ -1125,7 +1149,7 @@ class FilePickerScreen(ModalScreen):
         save_ext: str = ".prcss",
     ) -> None:
         super().__init__()
-        self._mode     = mode          # "open" | "open_prcss" | "open_wrkqst" | "save" | "logs"
+        self._mode     = mode          # "open" | "open_run" | "open_prcss" | "open_wrkqst" | "save" | "logs"
         self._start    = start or Path.home()
         self._filename = filename
         self._save_ext = save_ext
@@ -1134,16 +1158,24 @@ class FilePickerScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         titles = {
             "open": "Open Process",
+            "open_run": "Open Process",
             "open_prcss": "Link Process",
             "open_wrkqst": "Carry Over To Work Quest",
             "save": "Save Process As",
             "logs": "Browse Logs",
         }
+        self._drives = available_drives()
         with Vertical(id="fp_box"):
             yield Static(titles[self._mode], id="fp_title")
             yield Static(str(self._start), id="fp_path")
+            if len(self._drives) > 1:
+                with Horizontal(id="fp_drives"):
+                    for i, drive in enumerate(self._drives):
+                        yield Button(str(drive), id=f"fp_drive_{i}")
             if self._mode == "open":
                 yield ProcessFileTree(self._start, id="fp_tree")
+            elif self._mode == "open_run":
+                yield OpenFileTree(self._start, id="fp_tree")
             elif self._mode == "open_prcss":
                 yield PrcssFileTree(self._start, id="fp_tree")
             elif self._mode == "open_wrkqst":
@@ -1163,14 +1195,22 @@ class FilePickerScreen(ModalScreen):
         self.dismiss(None)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "fp_cancel":
+        btn_id = event.button.id or ""
+        if btn_id == "fp_cancel":
             self.dismiss(None)
-        elif event.button.id == "fp_ok":
+        elif btn_id == "fp_ok":
             self._submit_save()
+        elif btn_id.startswith("fp_drive_"):
+            self._jump_to(self._drives[int(btn_id.removeprefix("fp_drive_"))])
+
+    def _jump_to(self, path: Path) -> None:
+        self._cur_dir = path
+        self.query_one("#fp_path", Static).update(str(path))
+        self.query_one("#fp_tree", DirectoryTree).path = path
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         path = Path(str(event.path))
-        if self._mode in ("open", "open_prcss", "open_wrkqst", "logs"):
+        if self._mode in ("open", "open_run", "open_prcss", "open_wrkqst", "logs"):
             self.dismiss(path)
         elif self._mode == "save":
             self._cur_dir = path.parent
@@ -1290,6 +1330,16 @@ class SplashScreen(ModalScreen):
         self.dismiss(None)
 
 
+class AppFooter(Footer):
+    """Footer that highlights the "Complete Work Quest" key in green."""
+
+    def compose(self) -> ComposeResult:
+        for widget in super().compose():
+            if isinstance(widget, FooterKey) and widget.action == "complete_work_quest":
+                widget.add_class("-complete-action")
+            yield widget
+
+
 # ── Main Application ──────────────────────────────────────────────────────────
 
 class VeriTrakkApp(App):
@@ -1324,6 +1374,8 @@ class VeriTrakkApp(App):
         # Global
         Binding("escape", "go_back", "Back", show=True),
         Binding("q",      "quit",    "Quit", show=True),
+        # Rightmost: only appears once every task/subtask is done.
+        Binding("k",      "complete_work_quest", "Complete Work Quest", show=True),
     ]
 
     # ── Internal state ────────────────────────────────────────────────────────
@@ -1350,13 +1402,15 @@ class VeriTrakkApp(App):
     _build_move_source_idx: int | None = None
 
     def _picker_start_dir(self) -> Path:
+        """Shared default start location for every file picker (open/save/logs)
+        so they all land in the same place; the picker's drive buttons handle
+        jumping to C:, A:, etc. from there."""
+        home = Path.home()
+        if home.exists():
+            return home
         app_path = Path(__file__).resolve()
         app_drive = Path(app_path.anchor) if app_path.anchor else app_path.parent
-        if app_drive.exists():
-            return app_drive
-        home = Path.home()
-        home_drive = Path(home.anchor) if home.anchor else home
-        return home_drive if home_drive.exists() else home
+        return app_drive if app_drive.exists() else app_path.parent
 
     # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
@@ -1432,7 +1486,7 @@ class VeriTrakkApp(App):
         with Horizontal(id="close_bar"):
             yield Static("", id="close_action_text")
 
-        yield Footer()
+        yield AppFooter()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     def on_mount(self) -> None:
@@ -1657,9 +1711,18 @@ class VeriTrakkApp(App):
     def _open_picker(self) -> None:
         start = self._picker_start_dir()
         self.push_screen(
-            FilePickerScreen("open", start=start),
-            callback=lambda path: self._load_process(path) if path else None,
+            FilePickerScreen("open_run", start=start),
+            callback=self._on_open_selected,
         )
+
+    def _on_open_selected(self, path: Path | None) -> None:
+        if path is None:
+            return
+        if path.suffix == ".wrkqstlog":
+            self._set_mode("logs")
+            self._view_log(path)
+            return
+        self._load_process(path)
 
     def _build_picker(self) -> None:
         start = self._picker_start_dir()
@@ -1957,8 +2020,27 @@ class VeriTrakkApp(App):
         self._proc_path = file_path
         self._build_dir = file_path.parent
         self._sync_parent_states_from_children()
+        if proc.kind == "work_quest":
+            self._reconcile_work_quest_completion(file_path)
         save_session(file_path.parent, file_path.name)
         self._show_run()
+
+    def _reconcile_work_quest_completion(self, file_path: Path) -> None:
+        """Re-derive `.completed` from the "#COMPLETE" filename marker on open.
+
+        Stored `.completed` can go stale (older data, or a file renamed
+        outside the app) and drift from reality, since the marker — not this
+        field — is what every file listing elsewhere in the app treats as the
+        source of truth for "finalized". Matching it here on load is what lets
+        "Complete Work Quest" reappear for a quest whose tasks are all done
+        but was never actually finalized.
+        """
+        proc = self._process
+        if proc is None:
+            return
+        proc.completed = "#COMPLETE" in file_path.name
+        if not proc.completed:
+            proc.completed_at = ""
 
     def _clear_work_quest_return_context(self) -> None:
         self._return_wq_path = None
@@ -2783,8 +2865,9 @@ class VeriTrakkApp(App):
 
         self._sync_parent_states_from_children()
 
-        # Check if the whole process is done
-        if proc.is_fully_complete() and not proc.completed:
+        # Processes still auto-complete once every step is done. Work quests
+        # require the user to explicitly confirm via "Complete Work Quest" (k).
+        if proc.kind == "process" and proc.is_fully_complete() and not proc.completed:
             proc.completed    = True
             proc.completed_at = now.isoformat()
             self._mark_complete_file()
@@ -2795,6 +2878,7 @@ class VeriTrakkApp(App):
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
         self._refresh_status()
+        self.refresh_bindings()
         if next_idx is not None:
             self._move_run_cursor_to(next_idx)
         else:
@@ -2844,7 +2928,26 @@ class VeriTrakkApp(App):
         self._rebuild_proc_tree()
         self._refresh_run_sidebar()
         self._refresh_status()
+        self.refresh_bindings()
         self._update_step_info()
+
+    def action_complete_work_quest(self) -> None:
+        if self._mode != "run" or not self._process or self._process.kind != "work_quest":
+            return
+        proc = self._process
+        if proc.completed or not proc.is_fully_complete():
+            return
+
+        proc.completed    = True
+        proc.completed_at = datetime.now().isoformat()
+        self._mark_complete_file()
+
+        save_process(proc, self._proc_path)
+        self._rebuild_proc_tree()
+        self._refresh_run_sidebar()
+        self._refresh_status()
+        self.refresh_bindings()
+        self.notify("Work quest complete.", severity="information")
 
     def action_note_step(self) -> None:
         if self._mode != "run" or not self._process:
@@ -3263,29 +3366,41 @@ class VeriTrakkApp(App):
         tree.focus()
 
     # ── File rename helpers ───────────────────────────────────────────────────
-    def _mark_complete_file(self) -> None:
-        if not self._proc_path or "#COMPLETE" in self._proc_path.name:
-            return
-        new_name = f"{self._proc_path.stem}#COMPLETE{self._proc_path.suffix}"
-        new_path = self._proc_path.parent / new_name
+    def _sync_complete_marker(self, path: Path, completed: bool) -> Path:
+        """Rename `path` so "#COMPLETE" is present in its name iff `completed`.
+
+        Returns the (possibly renamed) path. On rename failure, returns the
+        original path unchanged.
+        """
+        has_marker = "#COMPLETE" in path.name
+        if completed == has_marker:
+            return path
+        if completed:
+            new_name = f"{path.stem}#COMPLETE{path.suffix}"
+        else:
+            new_name = path.name.replace("#COMPLETE", "")
+        new_path = path.parent / new_name
         try:
-            self._proc_path.rename(new_path)
+            path.rename(new_path)
+            return new_path
+        except OSError:
+            return path
+
+    def _mark_complete_file(self) -> None:
+        if not self._proc_path:
+            return
+        new_path = self._sync_complete_marker(self._proc_path, True)
+        if new_path != self._proc_path:
             self._proc_path = new_path
             save_session(new_path.parent, new_path.name)
-        except OSError:
-            pass
 
     def _unmark_complete_file(self) -> None:
-        if not self._proc_path or "#COMPLETE" not in self._proc_path.name:
+        if not self._proc_path:
             return
-        new_name = self._proc_path.name.replace("#COMPLETE", "")
-        new_path = self._proc_path.parent / new_name
-        try:
-            self._proc_path.rename(new_path)
+        new_path = self._sync_complete_marker(self._proc_path, False)
+        if new_path != self._proc_path:
             self._proc_path = new_path
             save_session(new_path.parent, new_path.name)
-        except OSError:
-            pass
 
     # ── Builder actions ───────────────────────────────────────────────────────
     def _rebuild_builder_tree(self) -> None:
@@ -3523,6 +3638,7 @@ class VeriTrakkApp(App):
         except OSError:
             self.notify("Carry over failed while updating destination work quest.", severity="error")
             return
+        destination_path = self._sync_complete_marker(destination_path, destination_proc_updated.completed)
 
         if self._build_path:
             try:
@@ -3533,10 +3649,12 @@ class VeriTrakkApp(App):
                     severity="error",
                 )
                 return
+            self._build_path = self._sync_complete_marker(self._build_path, source_proc_updated.completed)
 
         self._build_proc = source_proc_updated
 
         self._rebuild_builder_tree()
+        self._update_build_file_label()
         self.query_one("#builder_tree", Tree).focus()
         self.notify(
             f"Carried over {carried_leaf_count} unfinished tasks to {destination_path.name}.",
@@ -3792,7 +3910,7 @@ class VeriTrakkApp(App):
             self._do_save_build(self._build_path)
         else:
             # New process — ask where to save
-            start = self._build_dir or Path.home()
+            start = self._build_dir or self._picker_start_dir()
             suggested = sanitize_filename_for(self._build_proc.name, self._build_proc.kind)
             ext = ".wrkqst" if self._build_proc.kind == "work_quest" else ".prcss"
             self.push_screen(
@@ -4021,6 +4139,7 @@ class VeriTrakkApp(App):
                 "pause_step",
                 "toggle_clock",
                 "edit_time",
+                "complete_work_quest",
             ):
                 return False
         if action == "close_active":
@@ -4031,6 +4150,14 @@ class VeriTrakkApp(App):
             return self._mode == "run" and self._process is not None and self._process.kind == "work_quest"
         if action == "toggle_clock":
             return self._mode == "run"
+        if action == "complete_work_quest":
+            return (
+                self._mode == "run"
+                and self._process is not None
+                and self._process.kind == "work_quest"
+                and not self._process.completed
+                and self._process.is_fully_complete()
+            )
         if action in ("add_step", "add_sub_step", "edit_step", "delete_step"):
             return self._mode == "build" and not isinstance(self.focused, Input)
         if action == "copy_step":
