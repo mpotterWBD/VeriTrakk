@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -44,6 +45,10 @@ _KHAKI   = "#bdb76b"  # darkkhaki
 _TEAL    = "#5f9ea0"  # cadetblue
 _BLUE    = "#1e90ff"  # dodgerblue
 _PURPLE  = "#9370db"  # mediumpurple
+
+# Build toolbar sizing (cells) used to decide when its buttons wrap.
+_BUILD_BTN_MIN_WIDTH  = 8
+_BUILD_NAME_MIN_WIDTH = 24
 
 
 # ── Home matrix rain knobs ───────────────────────────────────────────────────
@@ -1147,9 +1152,11 @@ class FilePickerScreen(ModalScreen):
         start: Path | None = None,
         filename: str = "",
         save_ext: str = ".prcss",
+        title: str | None = None,
     ) -> None:
         super().__init__()
-        self._mode     = mode          # "open" | "open_run" | "open_prcss" | "open_wrkqst" | "save" | "logs"
+        self._mode     = mode          # "open" | "open_run" | "open_prcss" | "save" | "logs"
+        self._title    = title
         self._start    = start or Path.home()
         self._filename = filename
         self._save_ext = save_ext
@@ -1160,13 +1167,12 @@ class FilePickerScreen(ModalScreen):
             "open": "Open Process",
             "open_run": "Open Process",
             "open_prcss": "Link Process",
-            "open_wrkqst": "Carry Over To Work Quest",
             "save": "Save Process As",
             "logs": "Browse Logs",
         }
         self._drives = available_drives()
         with Vertical(id="fp_box"):
-            yield Static(titles[self._mode], id="fp_title")
+            yield Static(self._title or titles[self._mode], id="fp_title")
             yield Static(str(self._start), id="fp_path")
             if len(self._drives) > 1:
                 with Horizontal(id="fp_drives"):
@@ -1178,8 +1184,6 @@ class FilePickerScreen(ModalScreen):
                 yield OpenFileTree(self._start, id="fp_tree")
             elif self._mode == "open_prcss":
                 yield PrcssFileTree(self._start, id="fp_tree")
-            elif self._mode == "open_wrkqst":
-                yield WorkQuestFileTree(self._start, id="fp_tree")
             elif self._mode == "save":
                 yield DirOnlyTree(self._start, id="fp_tree")
                 yield Label("Filename")
@@ -1210,7 +1214,7 @@ class FilePickerScreen(ModalScreen):
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         path = Path(str(event.path))
-        if self._mode in ("open", "open_run", "open_prcss", "open_wrkqst", "logs"):
+        if self._mode in ("open", "open_run", "open_prcss", "logs"):
             self.dismiss(path)
         elif self._mode == "save":
             self._cur_dir = path.parent
@@ -1761,6 +1765,9 @@ class VeriTrakkApp(App):
         self._refresh_status()
         self._refresh_close_action_bar()
         self.query_one("#process_tree", Tree).focus()
+        # The footer can render before the run view settles; re-check once it has
+        # so "Complete Work Quest" shows for an already fully-complete quest.
+        self.call_after_refresh(self.refresh_bindings)
 
     def _show_build(self, existing_path: Path | None = None) -> None:
         self._set_mode("build")
@@ -1851,6 +1858,34 @@ class VeriTrakkApp(App):
         else:
             self.query_one("#side_build_title", Static).update("Building process:")
         self._refresh_move_button_state()
+        self._schedule_build_toolbar_layout()
+
+    def _schedule_build_toolbar_layout(self) -> None:
+        self.call_after_refresh(self._layout_build_toolbar)
+
+    def _layout_build_toolbar(self) -> None:
+        """Wrap the build toolbar buttons onto extra rows when they don't fit on one line."""
+        toolbar = self.query_one("#build_toolbar", Horizontal)
+        avail = toolbar.content_size.width
+        if avail <= 0:
+            return
+        buttons = [btn for btn in toolbar.query(".build_btn").results(Button) if btn.display]
+        if not buttons:
+            return
+        # Label + 1-cell line pad each side + tall border each side, floored at min-width.
+        widths = [max(_BUILD_BTN_MIN_WIDTH, len(str(btn.label)) + 4) for btn in buttons]
+        needed = _BUILD_NAME_MIN_WIDTH + sum(w + 1 for w in widths)
+        wrap = needed > avail
+        toolbar.set_class(wrap, "-wrap")
+        if wrap:
+            col_width = max(widths) + 1
+            cols = max(1, min(len(buttons), (avail + 1) // col_width))
+            toolbar.styles.grid_size_columns = cols
+            self.query_one("#build_name_inp", Input).styles.column_span = cols
+
+    def on_resize(self, _event: events.Resize) -> None:
+        if self._mode == "build":
+            self._schedule_build_toolbar_layout()
 
     # ── Button handling ───────────────────────────────────────────────────────
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -3504,160 +3539,149 @@ class VeriTrakkApp(App):
         clone.result = ""
         return clone
 
-    def _steps_to_forest(self, steps: list[Step]) -> list[dict[str, object]]:
-        forest: list[dict[str, object]] = []
-        stack: list[dict[str, object]] = []
-        for step in steps:
-            node = {"step": copy.deepcopy(step), "children": []}
-            while stack and (stack[-1]["step"]).level >= step.level:
-                stack.pop()
-            if stack:
-                (stack[-1]["children"]).append(node)
-            else:
-                forest.append(node)
-            stack.append(node)
-        return forest
+    def _carry_over_split(self, proc: Process) -> tuple[list[Step], int]:
+        """Return (steps to copy into the carried-over quest, unfinished leaf count).
 
-    def _merge_forest_by_parent_name(self, destination: list[dict[str, object]], incoming: list[dict[str, object]]) -> None:
-        for node in incoming:
-            incoming_step = node["step"]
-            incoming_children = node["children"]
-
-            # Parent de-duplication: if a same-name node already exists at this sibling level,
-            # fold incoming children into the existing node instead of adding another parent node.
-            matching_parent = None
-            if incoming_children:
-                for existing in destination:
-                    existing_step = existing["step"]
-                    if existing_step.label == incoming_step.label:
-                        matching_parent = existing
-                        break
-
-            if matching_parent is not None:
-                self._merge_forest_by_parent_name(matching_parent["children"], incoming_children)
-                continue
-
-            destination.append(copy.deepcopy(node))
-
-    def _flatten_forest(self, forest: list[dict[str, object]], level: int = 1) -> list[Step]:
-        flat: list[Step] = []
-        for node in forest:
-            step = node["step"]
-            step.level = level
-            flat.append(step)
-            flat.extend(self._flatten_forest(node["children"], level + 1))
-        return flat
-
-    def action_carry_over(self) -> None:
-        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "work_quest":
-            return
-        self.push_screen(
-            FilePickerScreen("open_wrkqst", start=self._picker_start_dir()),
-            callback=self._on_carry_over_selected,
-        )
-
-    def _on_carry_over_selected(self, destination_path: Path | None) -> None:
-        if destination_path is None or not self._build_proc:
-            return
-        if destination_path.suffix != ".wrkqst":
-            self.notify("Select a work quest file (.wrkqst).", severity="warning")
-            return
-        if self._build_path and destination_path == self._build_path:
-            self.notify("Choose a different destination work quest.", severity="warning")
-            return
-
-        try:
-            destination_proc = load_process(destination_path)
-        except OSError:
-            self.notify("Could not load selected work quest.", severity="error")
-            return
-
-        if destination_proc.kind != "work_quest":
-            self.notify("Selected file is not a work quest.", severity="warning")
-            return
-
-        total_steps = len(self._build_proc.steps)
-        if total_steps == 0:
-            self.notify("Current work quest has no tasks to carry over.", severity="information")
-            return
-
+        Unfinished leaves are copied along with their ancestor chain so the
+        hierarchy survives; completed branches stay behind in the source.
+        """
+        total_steps = len(proc.steps)
         children_map: dict[int, list[int]] = {i: [] for i in range(total_steps)}
         stack: list[int] = []
-        for idx, step in enumerate(self._build_proc.steps):
-            while stack and self._build_proc.steps[stack[-1]].level >= step.level:
+        for idx, step in enumerate(proc.steps):
+            while stack and proc.steps[stack[-1]].level >= step.level:
                 stack.pop()
             if stack:
                 children_map[stack[-1]].append(idx)
             stack.append(idx)
 
-        keep_in_source = [False] * total_steps
-        carry_to_target = [False] * total_steps
+        carry = [False] * total_steps
         for idx in range(total_steps - 1, -1, -1):
-            step = self._build_proc.steps[idx]
             child_idxs = children_map[idx]
-            any_kept_child = any(keep_in_source[child_idx] for child_idx in child_idxs)
-            any_carried_child = any(carry_to_target[child_idx] for child_idx in child_idxs)
-
-            keep_in_source[idx] = step.completed or any_kept_child
-            carry_to_target[idx] = (not step.completed) or any_carried_child
+            if child_idxs:
+                carry[idx] = any(carry[child_idx] for child_idx in child_idxs)
+            else:
+                carry[idx] = not proc.steps[idx].completed
 
         carried_steps = [
-            self._reset_carried_step_state(self._build_proc.steps[idx])
-            for idx in range(total_steps)
-            if carry_to_target[idx]
+            self._reset_carried_step_state(proc.steps[idx]) for idx in range(total_steps) if carry[idx]
         ]
-        carried_leaf_count = sum(
-            1
-            for idx in range(total_steps)
-            if carry_to_target[idx] and not children_map[idx] and not self._build_proc.steps[idx].completed
+        leaf_count = sum(1 for idx in range(total_steps) if carry[idx] and not children_map[idx])
+        return carried_steps, leaf_count
+
+    def _auto_finish_work_quest(self, proc: Process, now: datetime) -> None:
+        """Finish every unfinished task, banking any live time, and finalize the quest.
+
+        Hours already tracked against each task stay with this quest; the
+        task itself continues in the carried-over quest from zero.
+        """
+        for idx, step in enumerate(proc.steps):
+            if proc.has_children(idx) or step.completed:
+                continue
+            if step.active_since:
+                step.duration_seconds += self._work_quest_seconds_between(proc, step.active_since, now)
+                self._sync_duration_minutes(step)
+            step.active_since = ""
+            step.paused = False
+            step.completed = True
+            step.completed_at = now.isoformat()
+
+        if proc.clocked_in:
+            proc.clocked_in = False
+            proc.clock_active_since = ""
+            proc.clock_events.append(f"OUT|{now.isoformat()}")
+
+        self._sync_parent_states_for_process(proc)
+        proc.completed = True
+        proc.completed_at = now.isoformat()
+
+    def action_carry_over(self) -> None:
+        if self._mode != "build" or not self._build_proc or self._build_proc.kind != "work_quest":
+            return
+        if not self._build_path:
+            self.notify("Save this work quest before carrying over.", severity="warning")
+            return
+        _, leaf_count = self._carry_over_split(self._build_proc)
+        if leaf_count == 0:
+            self.notify("No unfinished tasks found to carry over.", severity="information")
+            return
+        self.push_screen(
+            ConfirmScreen(
+                f"Carry over {leaf_count} unfinished task(s) to a new work quest?\n\n"
+                f"They will be marked finished in {self._build_path.name} "
+                "(keeping the hours already tracked) and the work quest will be completed."
+            ),
+            callback=self._on_carry_over_confirmed,
         )
 
+    def _on_carry_over_confirmed(self, confirmed: bool | None) -> None:
+        if not confirmed or not self._build_proc or not self._build_path:
+            return
+        start = self._build_path.parent
+        suggested = sanitize_filename_for(f"{self._build_proc.name} (Carry Over)", "work_quest")
+        self.push_screen(
+            FilePickerScreen(
+                "save",
+                start=start,
+                filename=suggested,
+                save_ext=".wrkqst",
+                title="Save New Carried-Over Work Quest As",
+            ),
+            callback=self._on_carry_over_selected,
+        )
+
+    def _on_carry_over_selected(self, destination_path: Path | None) -> None:
+        if destination_path is None or not self._build_proc or not self._build_path:
+            return
+        if destination_path.suffix != ".wrkqst":
+            destination_path = destination_path.with_name(destination_path.name + ".wrkqst")
+        if destination_path.exists():
+            self.notify(f"{destination_path.name} already exists. Choose a new name.", severity="warning")
+            return
+
+        carried_steps, leaf_count = self._carry_over_split(self._build_proc)
         if not carried_steps:
             self.notify("No unfinished tasks found to carry over.", severity="information")
             return
 
-        source_proc_updated = copy.deepcopy(self._build_proc)
-        source_proc_updated.steps = [self._build_proc.steps[idx] for idx in range(total_steps) if keep_in_source[idx]]
-        self._sync_parent_states_for_process(source_proc_updated)
-        source_proc_updated.completed = source_proc_updated.is_fully_complete()
-        if not source_proc_updated.completed:
-            source_proc_updated.completed_at = ""
+        new_name = destination_path.stem.replace("#COMPLETE", "").strip() or "New Work Quest"
+        new_proc = Process(
+            name=new_name,
+            kind="work_quest",
+            spawn_instances=self._build_proc.spawn_instances,
+            steps=carried_steps,
+        )
+        self._sync_parent_states_for_process(new_proc)
 
-        destination_proc_updated = copy.deepcopy(destination_proc)
-        destination_forest = self._steps_to_forest(destination_proc_updated.steps)
-        carried_forest = self._steps_to_forest(carried_steps)
-        self._merge_forest_by_parent_name(destination_forest, carried_forest)
-        destination_proc_updated.steps = self._flatten_forest(destination_forest)
-        self._sync_parent_states_for_process(destination_proc_updated)
-        destination_proc_updated.completed = destination_proc_updated.is_fully_complete()
-        if not destination_proc_updated.completed:
-            destination_proc_updated.completed_at = ""
+        source_proc = copy.deepcopy(self._build_proc)
+        self._auto_finish_work_quest(source_proc, datetime.now())
 
         try:
-            save_process(destination_proc_updated, destination_path)
+            save_process(new_proc, destination_path)
         except OSError:
-            self.notify("Carry over failed while updating destination work quest.", severity="error")
+            self.notify("Carry over failed: could not create the new work quest.", severity="error")
             return
-        destination_path = self._sync_complete_marker(destination_path, destination_proc_updated.completed)
 
-        if self._build_path:
-            try:
-                save_process(source_proc_updated, self._build_path)
-            except OSError:
-                self.notify(
-                    "Destination updated, but current source work quest could not be saved.",
-                    severity="error",
-                )
-                return
-            self._build_path = self._sync_complete_marker(self._build_path, source_proc_updated.completed)
+        source_path = self._build_path
+        try:
+            save_process(source_proc, source_path)
+        except OSError:
+            self.notify(
+                "New work quest created, but the original could not be saved.",
+                severity="error",
+            )
+            return
+        source_path = self._sync_complete_marker(source_path, True)
 
-        self._build_proc = source_proc_updated
-
-        self._rebuild_builder_tree()
-        self._update_build_file_label()
-        self.query_one("#builder_tree", Tree).focus()
+        # The new quest becomes the active one, exactly as if it had just been created.
+        self._process = new_proc
+        self._proc_path = destination_path
+        save_session(destination_path.parent, destination_path.name)
+        # Defer until the save dialog has closed so the builder widgets are on screen.
+        self.call_after_refresh(self._show_build, destination_path)
         self.notify(
-            f"Carried over {carried_leaf_count} unfinished tasks to {destination_path.name}.",
+            f"Carried over {leaf_count} task(s) to {destination_path.name}. "
+            f"{source_path.name} is complete.",
             severity="information",
         )
 

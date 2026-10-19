@@ -10,7 +10,7 @@ import pytest
 from rich.text import Text
 
 from src.app import VeriTrakkApp
-from src.storage import Process, Step, save_process
+from src.storage import Process, Step, load_process, save_process
 
 
 @pytest.fixture
@@ -697,64 +697,6 @@ class TestResetCarriedStepState:
         assert step.completed is True
 
 
-class TestStepsToForestAndFlatten:
-    def test_round_trip_preserves_order_and_levels(self, app):
-        steps = [
-            Step(label="A", level=1),
-            Step(label="A1", level=2),
-            Step(label="A1a", level=3),
-            Step(label="A2", level=2),
-            Step(label="B", level=1),
-        ]
-        forest = app._steps_to_forest(steps)
-        flat = app._flatten_forest(forest)
-
-        assert [s.label for s in flat] == ["A", "A1", "A1a", "A2", "B"]
-        assert [s.level for s in flat] == [1, 2, 3, 2, 1]
-
-    def test_forest_structure_nests_children_under_correct_parent(self, app):
-        steps = [Step(label="A", level=1), Step(label="A1", level=2), Step(label="B", level=1)]
-        forest = app._steps_to_forest(steps)
-        assert len(forest) == 2
-        assert forest[0]["step"].label == "A"
-        assert [c["step"].label for c in forest[0]["children"]] == ["A1"]
-        assert forest[1]["step"].label == "B"
-        assert forest[1]["children"] == []
-
-
-class TestMergeForestByParentName:
-    def test_matching_parent_label_merges_children_instead_of_duplicating(self, app):
-        destination = app._steps_to_forest([
-            Step(label="Weekly", level=1),
-            Step(label="Old Task", level=2),
-        ])
-        incoming = app._steps_to_forest([
-            Step(label="Weekly", level=1),
-            Step(label="New Task", level=2),
-        ])
-        app._merge_forest_by_parent_name(destination, incoming)
-
-        assert len(destination) == 1   # no duplicate "Weekly" parent
-        child_labels = [c["step"].label for c in destination[0]["children"]]
-        assert child_labels == ["Old Task", "New Task"]
-
-    def test_non_matching_label_is_appended_as_new_entry(self, app):
-        destination = app._steps_to_forest([Step(label="Existing", level=1)])
-        incoming = app._steps_to_forest([Step(label="Brand New", level=1)])
-        app._merge_forest_by_parent_name(destination, incoming)
-
-        labels = [n["step"].label for n in destination]
-        assert labels == ["Existing", "Brand New"]
-
-    def test_leaf_incoming_node_with_no_children_is_appended_not_merged(self, app):
-        # Nodes with no children never look for a same-name match; two
-        # independent leaves sharing a label both end up in the destination.
-        destination = app._steps_to_forest([Step(label="Task", level=1)])
-        incoming = app._steps_to_forest([Step(label="Task", level=1)])
-        app._merge_forest_by_parent_name(destination, incoming)
-        assert len(destination) == 2
-
-
 # ── _sync_complete_marker ────────────────────────────────────────────────────
 
 class TestSyncCompleteMarker:
@@ -788,76 +730,115 @@ class TestSyncCompleteMarker:
         assert app._sync_complete_marker(incomplete_path, False) == incomplete_path
 
 
-# ── _on_carry_over_selected ──────────────────────────────────────────────────
+# ── Carry over to a new work quest ───────────────────────────────────────────
+
+class TestCarryOverSplit:
+    def test_only_unfinished_leaves_and_their_parents_are_carried(self, app):
+        proc = Process(name="WQ", kind="work_quest", steps=[
+            Step(label="Weekly", level=1),
+            Step(label="Done", level=2, completed=True),
+            Step(label="Open", level=2, started=True, duration_seconds=600),
+            Step(label="All Done", level=1, completed=True),
+            Step(label="Fresh", level=1),
+        ])
+        carried, leaf_count = app._carry_over_split(proc)
+
+        assert [(s.label, s.level) for s in carried] == [("Weekly", 1), ("Open", 2), ("Fresh", 1)]
+        assert leaf_count == 2
+        # Carried copies start from zero; the source keeps its tracked time.
+        assert carried[1].duration_seconds == 0 and carried[1].started is False
+        assert proc.steps[2].duration_seconds == 600
+
+
+class TestAutoFinishWorkQuest:
+    def test_unfinished_tasks_completed_and_live_time_banked(self, app):
+        now = datetime(2026, 1, 2, 12, 0, 0)
+        proc = Process(name="WQ", kind="work_quest", steps=[
+            Step(label="Parent", level=1),
+            Step(
+                label="Running", level=2, started=True,
+                active_since=(now - timedelta(minutes=30)).isoformat(),
+                duration_seconds=600,
+            ),
+            Step(label="Never Started", level=2),
+        ])
+        proc.clocked_in = True
+        proc.clock_active_since = (now - timedelta(hours=1)).isoformat()
+        proc.clock_events = [f"IN|{proc.clock_active_since}"]
+
+        app._auto_finish_work_quest(proc, now)
+
+        running, never = proc.steps[1], proc.steps[2]
+        assert running.completed and running.active_since == ""
+        assert running.duration_seconds == 600 + 30 * 60
+        assert never.completed and never.duration_seconds == 0
+        assert proc.steps[0].completed is True
+        assert proc.steps[0].duration_seconds == 600 + 30 * 60
+        assert proc.completed is True
+        assert proc.clocked_in is False
+        assert proc.clock_events[-1] == f"OUT|{now.isoformat()}"
+
 
 class TestOnCarryOverSelected:
-    def _wq(self, name: str, steps: list[Step]) -> Process:
-        return Process(name=name, kind="work_quest", steps=steps)
-
     def _stub_ui(self, app, monkeypatch):
-        monkeypatch.setattr(app, "query_one", lambda *a, **kw: SimpleNamespace(focus=lambda: None))
         monkeypatch.setattr(app, "notify", lambda *a, **kw: None)
-        monkeypatch.setattr(app, "_rebuild_builder_tree", lambda: None)
-        monkeypatch.setattr(app, "_update_build_file_label", lambda: None)
-        monkeypatch.setattr(app, "_move_builder_cursor_to", lambda *a, **kw: None)
+        shown: list[Path] = []
+        monkeypatch.setattr(app, "_show_build", lambda existing_path=None: shown.append(existing_path))
+        monkeypatch.setattr(app, "call_after_refresh", lambda fn, *args: fn(*args))
+        return shown
 
-    def test_source_work_quest_gets_marked_complete_on_disk_when_last_task_carried_over(
-        self, app, monkeypatch, tmp_path
-    ):
-        # Regression test: carrying over the last unfinished task used to leave
-        # `.completed` set True in the JSON without renaming the file to add
-        # "#COMPLETE", so the finished work quest never showed as complete
-        # until a task was uncompleted/completed again through the run flow.
-        self._stub_ui(app, monkeypatch)
-
-        source_path = tmp_path / "Source.wrkqst"
-        source_proc = self._wq(
-            "Source",
-            [Step(label="Done", level=1, completed=True), Step(label="Not Done", level=1)],
-        )
+    def _source(self, tmp_path) -> tuple[Process, Path]:
+        source_path = tmp_path / "Week 1.wrkqst"
+        source_proc = Process(name="Week 1", kind="work_quest", steps=[
+            Step(label="Done", level=1, completed=True, duration_seconds=3600),
+            Step(label="Half Done", level=1, started=True, paused=True, duration_seconds=1800),
+        ])
         save_process(source_proc, source_path)
+        return source_proc, source_path
 
-        dest_path = tmp_path / "Dest.wrkqst"
-        dest_proc = self._wq("Dest", [Step(label="Existing", level=1, completed=True)])
-        save_process(dest_proc, dest_path)
-
+    def test_creates_new_quest_and_finalizes_original(self, app, monkeypatch, tmp_path):
+        shown = self._stub_ui(app, monkeypatch)
+        source_proc, source_path = self._source(tmp_path)
         app._mode = "build"
         app._build_proc = source_proc
         app._build_path = source_path
 
-        app._on_carry_over_selected(dest_path)
+        new_path = tmp_path / "Week 2.wrkqst"
+        app._on_carry_over_selected(new_path)
 
-        assert app._build_path == tmp_path / "Source#COMPLETE.wrkqst"
-        assert app._build_path.exists()
-        assert not source_path.exists()
-        assert app._build_proc.completed is True
+        # Original: every task finished, hours kept, file marked complete.
+        finished_path = tmp_path / "Week 1#COMPLETE.wrkqst"
+        assert finished_path.exists() and not source_path.exists()
+        finished = load_process(finished_path)
+        assert finished.completed is True
+        assert [s.completed for s in finished.steps] == [True, True]
+        assert finished.steps[1].duration_seconds == 1800
 
-    def test_destination_work_quest_marker_removed_when_it_receives_unfinished_tasks(
-        self, app, monkeypatch, tmp_path
-    ):
+        # New quest: only the unfinished task, reset to zero.
+        new_proc = load_process(new_path)
+        assert new_proc.kind == "work_quest"
+        assert new_proc.name == "Week 2"
+        assert [s.label for s in new_proc.steps] == ["Half Done"]
+        assert new_proc.steps[0].completed is False
+        assert new_proc.steps[0].duration_seconds == 0
+
+        # The new quest is opened in the builder and becomes the active quest.
+        assert shown == [new_path]
+        assert app._proc_path == new_path
+
+    def test_refuses_to_overwrite_existing_file(self, app, monkeypatch, tmp_path):
         self._stub_ui(app, monkeypatch)
-
-        source_path = tmp_path / "Source.wrkqst"
-        source_proc = self._wq("Source", [Step(label="Not Done", level=1)])
-        save_process(source_proc, source_path)
-
-        # Destination was previously completed, so its file already carries
-        # the "#COMPLETE" marker; carrying an unfinished task into it should
-        # strip the marker back off.
-        dest_path = tmp_path / "Dest#COMPLETE.wrkqst"
-        dest_proc = self._wq("Dest", [Step(label="Existing", level=1, completed=True)])
-        dest_proc.completed = True
-        save_process(dest_proc, dest_path)
-
+        source_proc, source_path = self._source(tmp_path)
         app._mode = "build"
         app._build_proc = source_proc
         app._build_path = source_path
 
-        app._on_carry_over_selected(dest_path)
+        existing = tmp_path / "Existing.wrkqst"
+        save_process(Process(name="Existing", kind="work_quest"), existing)
+        app._on_carry_over_selected(existing)
 
-        renamed_dest = tmp_path / "Dest.wrkqst"
-        assert renamed_dest.exists()
-        assert not dest_path.exists()
+        assert source_path.exists()   # original untouched
+        assert load_process(existing).steps == []
 
 
 # ── _root_template_path ──────────────────────────────────────────────────────
