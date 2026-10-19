@@ -89,7 +89,7 @@ Useful variations:
 - `tests/test_app_logic.py` — `VeriTrakkApp`'s non-UI business logic: run
   tree metrics, work-quest clock overlap calculations, parent/child state
   derivation, the threshold pass/fail evaluator, and the work-quest
-  carry-over merge logic.
+  carry-over (auto-finish original + new quest) logic.
 
 These tests never call `VeriTrakkApp().run()` or `python -m src` (that would
 launch the real interactive terminal app and hang). They construct

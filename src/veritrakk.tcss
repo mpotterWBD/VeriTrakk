@@ -370,6 +370,24 @@ MarkdownFence {
     min-width: 8;
 }
 
+/* Narrow screens: name on its own row, buttons wrap into a grid (columns set in code). */
+#build_toolbar.-wrap {
+    layout: grid;
+    grid-rows: auto;
+    grid-gutter: 0 1;
+}
+
+#build_toolbar.-wrap #build_name_inp {
+    width: 100%;
+    margin: 0;
+}
+
+#build_toolbar.-wrap .build_btn {
+    width: 100%;
+    margin: 0;
+}
+
+
 #builder_tree {
     height: 1fr;
     border: none;
