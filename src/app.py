@@ -12,6 +12,7 @@ import re
 import string
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Iterable
 
 from rich.text import Text
@@ -45,6 +46,9 @@ _KHAKI   = "#bdb76b"  # darkkhaki
 _TEAL    = "#5f9ea0"  # cadetblue
 _BLUE    = "#1e90ff"  # dodgerblue
 _PURPLE  = "#9370db"  # mediumpurple
+
+# Two clock IN/OUT toggles closer than this are the app talking to itself, not a click.
+CLOCK_TOGGLE_MIN_S = 0.25
 
 # Build toolbar sizing (cells) used to decide when its buttons wrap.
 _BUILD_BTN_MIN_WIDTH  = 8
@@ -1396,6 +1400,7 @@ class VeriTrakkApp(App):
     _pending_manual_idx: int           = -1
     _pending_text_idx: int             = -1
     _syncing_clock_switch: bool        = False
+    _last_clock_toggle: float          = -1e9   # monotonic() of the last clock IN/OUT
     _return_wq_path:    Path | None    = None
     _return_wq_step_idx: int | None    = None
     _matrix_top_columns: list[dict[str, int]] = []
@@ -2323,8 +2328,12 @@ class VeriTrakkApp(App):
         strip.display = True
         digit.update(self._format_seconds(self._process.total_clock_seconds()))
 
+        # Set it silently: Textual delivers Switch.Changed after the fact, and a
+        # redraw (the once-a-second tick) landing between a click and its
+        # handling once set off an endless IN/OUT loop (Nov 2 2026).
         self._syncing_clock_switch = True
-        switch.value = self._process.clocked_in
+        with switch.prevent(Switch.Changed):
+            switch.value = self._process.clocked_in
         switch.disabled = False
         self._syncing_clock_switch = False
 
@@ -2352,6 +2361,14 @@ class VeriTrakkApp(App):
         if clock_in == self._process.clocked_in:
             return
 
+        # Nobody clocks in and out within a quarter of a second: a toggle that
+        # quick is the app talking to itself, not a click. Ignore it.
+        tick = monotonic()
+        if tick - self._last_clock_toggle < CLOCK_TOGGLE_MIN_S:
+            self._refresh_quest_clock_widgets()
+            return
+        self._last_clock_toggle = tick
+
         now = datetime.now().isoformat()
         if clock_in:
             self._process.clocked_in = True
@@ -2374,6 +2391,8 @@ class VeriTrakkApp(App):
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id != "quest_clock_switch" or self._syncing_clock_switch:
             return
+        if event.value != event.switch.value:
+            return   # stale: the switch has been set again since (a redraw)
         self._toggle_work_quest_clock(event.value)
 
     # ── Process tree (run mode) ───────────────────────────────────────────────
