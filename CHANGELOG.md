@@ -14,7 +14,7 @@ a git tag `vX.Y.Z`.
 
 ---
 
-## Unreleased
+## 1.2.0 (2026-11-16)
 
 ### App
 - The version shows on the home screen under the name, and on the run screen
