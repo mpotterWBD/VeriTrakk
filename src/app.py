@@ -35,7 +35,7 @@ from .storage import (
     load_process, save_process,
     load_session, save_session,
     sanitize_filename_for,
-    generate_log_text, publish_process,
+    generate_log_text, publish_process, log_plan,
     create_process_instance,
 )
 
@@ -270,13 +270,16 @@ class WorkQuestFileTree(DirectoryTree):
 
 
 class LogFileTree(DirectoryTree):
-    """Shows directories, log files, and #COMPLETE source files."""
+    """Shows directories and work quest logs only: the PDFs (opened in the PDF
+    viewer) and older text logs. A finished quest is logged with the Logs button
+    while it's open (VeriTrakkApp.action_log_work_quest()), not from here; its
+    processes are logged with it (Mike, 2026-11-16)."""
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [
             p for p in paths
             if p.is_dir()
-            or p.suffix in (".prcsslog", ".wrkqstlog")
-            or (p.suffix in (".prcss", ".wrkqst") and "#COMPLETE" in p.name)
+            or p.suffix == ".wrkqstlog"
+            or p.name.endswith(".wrkqstlog.pdf")
         ]
 
 
@@ -1394,6 +1397,7 @@ class VeriTrakkApp(App):
     _build_proc:        Process | None = None
     _build_dir:         Path    | None = None
     _build_path:        Path    | None = None  # set when editing an existing file
+    _carried_over_source: Path  | None = None  # the quest Carry Over just finished (for Log)
     _build_root_path:   Path    | None = None  # base template for spawned instances
     _build_kind:        str           = "process"
     _build_spawn_instances: bool      = True
@@ -1750,17 +1754,55 @@ class VeriTrakkApp(App):
     def _on_logs_selected(self, path: Path | None) -> None:
         if path is None:
             return
-        if path.suffix in (".prcsslog", ".wrkqstlog"):
+        if path.name.endswith(".wrkqstlog.pdf"):
+            self._open_pdf(path)
+        elif path.suffix in (".prcsslog", ".wrkqstlog"):   # (older logs, from before they were just PDFs)
             self._set_mode("logs")
             self._view_log(path)
-        elif path.suffix in (".prcss", ".wrkqst") and "#COMPLETE" in path.name:
-            self.push_screen(
-                ConfirmScreen(
-                    f"Publish and dissolve:\n{path.name}\n\n"
-                    "This will write a log file and delete the source file."
-                ),
-                callback=lambda confirmed: self._do_dissolve(path) if confirmed else None,
-            )
+
+    # -- Log (Mike, 2026-11-16) ---------------------------------------------------
+    def _log_target(self) -> tuple[Process, Path] | None:
+        """The finished work quest Log logs: the one open (running, or in the
+        builder), or else the one Carry Over just finished (the app moves on to the
+        new quest, so it's remembered here). None if there's none."""
+        candidates = [
+            (self._process, self._proc_path),
+            (self._build_proc, self._build_path),
+        ]
+        if self._carried_over_source is not None:
+            try:
+                candidates.append((load_process(self._carried_over_source), self._carried_over_source))
+            except (OSError, ValueError):
+                pass
+        for proc, path in candidates:
+            if (proc is not None and path is not None and proc.kind == "work_quest" and proc.completed
+                    and path.suffix == ".wrkqst" and path.exists()):
+                return proc, path
+        return None
+
+    def action_log_work_quest(self) -> None:
+        """Logs: the finished work quest (_log_target()), after a confirmation of
+        what happens to its files; with none, the Logs browser to view past logs."""
+        target = self._log_target()
+        if target is None:
+            self._logs_picker()
+            return
+        proc, path = target
+        plan = log_plan(proc, path)
+        lines = [
+            f"Log {proc.name}?",
+            "",
+            f"Writes {plan.pdf_path.name}, then moves these into the folder",
+            f'"{plan.folder.name}" (nothing is deleted):',
+        ]
+        lines += [f"  - {p.name}" for p in plan.moving]
+        if plan.staying:
+            lines += ["", "Left where they are (not logged):"]
+            lines += [f"  - {name}: {why}" for name, why in plan.staying]
+        self.push_screen(
+            ConfirmScreen("\n".join(lines)),
+            callback=lambda confirmed: self._do_dissolve(path) if confirmed else None,
+        )
 
     def _show_run(self) -> None:
         self._set_mode("run")
@@ -1907,7 +1949,7 @@ class VeriTrakkApp(App):
         if bid == "btn_build":
             self._pick_build_target(); return
         if bid == "btn_logs":
-            self._logs_picker(); return
+            self.action_log_work_quest(); return
 
         # Builder toolbar
         if bid == "btn_add_step":
@@ -3557,6 +3599,7 @@ class VeriTrakkApp(App):
         clone.duration_seconds = 0
         clone.captured_text_input = ""
         clone.result = ""
+        clone.carried_over = False
         return clone
 
     def _carry_over_split(self, proc: Process) -> tuple[list[Step], int]:
@@ -3605,6 +3648,7 @@ class VeriTrakkApp(App):
             step.paused = False
             step.completed = True
             step.completed_at = now.isoformat()
+            step.carried_over = True   # (the log shows it as CARRIED OVER, not done here)
 
         if proc.clocked_in:
             proc.clocked_in = False
@@ -3692,6 +3736,7 @@ class VeriTrakkApp(App):
             )
             return
         source_path = self._sync_complete_marker(source_path, True)
+        self._carried_over_source = source_path   # (so Log can log it: the app moves on to the new quest)
 
         # The new quest becomes the active one, exactly as if it had just been created.
         self._process = new_proc
@@ -4078,21 +4123,42 @@ class VeriTrakkApp(App):
         self.query_one("#status_bar", Static).update(log_label)
 
     def _do_dissolve(self, file_path: Path) -> None:
+        # The log is just the PDF now (Mike, 2026-11-16): no text log to show in the
+        # viewer, so say where the PDF went. Its files were moved into a folder
+        # beside it, so the quest isn't open any more.
         try:
             proc     = load_process(file_path)
-            log_path = publish_process(proc, file_path)
+            plan     = log_plan(proc, file_path)
+            pdf_path = publish_process(proc, file_path)
             sess = load_session()
             if sess and sess[0] == file_path.parent and sess[1] == file_path.name:
                 save_session(file_path.parent, "")
-            self._set_mode("logs")
-            self._view_log(log_path)
-            status = Text("  LOG  ", style="dim")
-            status.append(log_path.name, style=f"bold {_SALMON}")
-            status.append("    PDF  ", style="dim")
-            status.append(log_path.name + ".pdf", style=f"bold {_TEAL}")
+            if self._proc_path == file_path:
+                self._process = None
+                self._proc_path = None
+                self._clear_work_quest_return_context()
+            if self._build_path == file_path:
+                self._build_proc = None
+                self._build_path = None
+            if self._carried_over_source == file_path:
+                self._carried_over_source = None
+            self._show_home()
+            status = Text("  LOG PDF  ", style="dim")
+            status.append(pdf_path.name, style=f"bold {_TEAL}")
+            status.append("   files in  ", style="dim")
+            status.append(plan.folder.name, style=f"bold {_SALMON}")
+            status.append(f"   ({pdf_path.parent})", style="dim")
             self.query_one("#status_bar", Static).update(status)
+            self.notify(f"Log written: {pdf_path.name}; files moved to {plan.folder.name}", title="Work Quest Logged", severity="information")
         except OSError:
-            pass
+            self.notify("Could not write the log.", severity="error")
+
+    def _open_pdf(self, path: Path) -> None:
+        """Opens a log PDF in the computer's own PDF viewer."""
+        try:
+            os.startfile(path)   # (Windows)
+        except (AttributeError, OSError):
+            self.notify(f"Could not open {path.name}.", severity="error")
 
     # ── Tree cursor events ────────────────────────────────────────────────────
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:

@@ -672,7 +672,7 @@ class TestWrapToWidth:
 # ── publish_process orchestration ────────────────────────────────────────────
 
 class TestPublishProcess:
-    def test_writes_text_and_pdf_logs_and_deletes_source(self, tmp_path, monkeypatch):
+    def test_writes_only_the_pdf_log_and_keeps_the_source_in_a_folder(self, tmp_path, monkeypatch):
         logs_dir = tmp_path / "logs"
         monkeypatch.setattr(storage, "LOGS_DIR", logs_dir)
 
@@ -682,12 +682,12 @@ class TestPublishProcess:
 
         log_path = publish_process(proc, src_path)
 
-        assert log_path == src_path.parent / "MyProc.prcsslog"
-        assert log_path.exists()
-        assert (src_path.parent / "MyProc.prcsslog.pdf").exists()
-        assert (logs_dir / "MyProc.prcsslog").exists()
+        # (Mike, 2026-11-16: the log is just the PDF, no text log.)
+        assert log_path == src_path.parent / "MyProc.prcsslog.pdf"
+        assert log_path.read_bytes().startswith(b"%PDF")
         assert (logs_dir / "MyProc.prcsslog.pdf").exists()
-        assert not src_path.exists()
+        assert not (src_path.parent / "MyProc.prcsslog").exists() and not (logs_dir / "MyProc.prcsslog").exists()
+        assert not src_path.exists() and (tmp_path / "MyProc Files" / "MyProc.prcss").exists()   # (kept, not deleted)
 
     def test_work_quest_gets_wrkqstlog_extension(self, tmp_path, monkeypatch):
         monkeypatch.setattr(storage, "LOGS_DIR", tmp_path / "logs")
@@ -697,7 +697,7 @@ class TestPublishProcess:
 
         log_path = publish_process(proc, src_path)
 
-        assert log_path.name == "MyQuest.wrkqstlog"
+        assert log_path.name == "MyQuest.wrkqstlog.pdf"
 
     def test_complete_suffix_stripped_from_stem(self, tmp_path, monkeypatch):
         monkeypatch.setattr(storage, "LOGS_DIR", tmp_path / "logs")
@@ -707,4 +707,4 @@ class TestPublishProcess:
 
         log_path = publish_process(proc, src_path)
 
-        assert log_path.name == "MyProc.prcsslog"
+        assert log_path.name == "MyProc.prcsslog.pdf"

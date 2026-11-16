@@ -18,6 +18,7 @@ _APP_ROOT    = Path(__file__).resolve().parent.parent
 DATA_DIR     = _APP_ROOT / "data"
 LOGS_DIR     = DATA_DIR / "logs"
 SESSION_FILE = DATA_DIR / "session.json"
+LOGO_SVG     = _APP_ROOT / "assets" / "logo_with_circle_nowords.svg"   # the log PDFs' watermark
 
 
 def _rgb255(red: int, green: int, blue: int) -> tuple[float, float, float]:
@@ -25,9 +26,36 @@ def _rgb255(red: int, green: int, blue: int) -> tuple[float, float, float]:
 
 
 # PDF text color knobs. Change these three values to retune the exported PDF.
-PDF_NOTE_TEXT_COLOR = _rgb255(163, 66, 20)           # burnt sienna — top-level task notes
+PDF_NOTE_TEXT_COLOR = _rgb255(21, 116, 108)          # deep teal — task notes (Mike, 2026-11-16: every note one color)
 PDF_SUBTASK_TEXT_COLOR = _rgb255(58, 90, 128)        # muted slate blue — subtask rows
+PDF_CARRIED_TEXT_COLOR = _rgb255(112, 112, 122)      # muted gray — tasks carried over to the next work quest
 PDF_SUBTASK_NOTE_TEXT_COLOR = _rgb255(21, 116, 108)  # deep teal — subtask notes
+# Subtask hierarchy (Mike, 2026-11-16: so you can tell who belongs with who). A
+# parent (a subtask with children) is bold and bigger, each level of parents a
+# step smaller and the next color down the line: tasks black, then
+# PDF_SUBTASK_PARENT_COLORS in turn (blue, brick red, blue, brick red...). A
+# subtask with no children is in its parent's color, not bold, and smaller.
+PDF_SUBTASK_PARENT_COLORS = [                         # parents by depth under their task (cycling)
+    _rgb255(31, 92, 196),    # royal blue
+    _rgb255(156, 52, 40),    # brick red (an earth tone; redder than the burnt-sienna notes)
+]
+# Everything in a log PDF (text, line spacing, gaps, boxes) at this size, the
+# page margins staying put (Mike, 2026-11-16: 10% larger, then 25% on that, then
+# 15% off, then 10% off). The layout's drawn on a page 1/scale the size, then
+# scaled up to fill the real one.
+PDF_TEXT_SCALE = 1.05
+# The logo (LOGO_SVG) as a watermark behind every page of a log PDF (Mike,
+# 2026-11-16): centred, this wide (points; the page is 612 x 792), in the logo's
+# own color faded this far toward white (0 = invisible, 1 = full color).
+PDF_WATERMARK_WIDTH = 440.0
+PDF_WATERMARK_STRENGTH = 0.10
+PDF_SUBTASK_L2_SIZE = 11.5
+PDF_SUBTASK_BRANCH_STEP = 0.6    # each level deeper (with children) is this much smaller
+PDF_SUBTASK_BRANCH_MIN = 9.75    # ...but never smaller than this: still bigger than a plain subtask
+PDF_SUBTASK_LEAF_SIZE = 9.5
+# A linked process's log, embedded under its work quest item: boxed, in its own color.
+PDF_LINKED_TEXT_COLOR = _rgb255(122, 46, 118)         # plum
+PDF_LINKED_BOX_FILL = _rgb255(249, 242, 248)          # faint plum tint
 
 
 # ── Data Model ────────────────────────────────────────────────────────────────
@@ -53,6 +81,7 @@ class Step:
     result: str = ""          # "PASS" | "FAIL" | ""
     linked_process_path: str = ""
     main_quest: bool = False
+    carried_over: bool = False  # finished by Carry Over: handed on to the next work quest, not done here
 
     def has_threshold(self) -> bool:
         return bool(self.threshold_upper or self.threshold_lower)
@@ -197,6 +226,7 @@ _FIELDS = [
     "level", "label", "completed", "completed_at",
     "started", "started_at", "paused", "active_since", "duration_minutes", "duration_seconds",
     "note", "threshold_upper", "threshold_lower", "manual_pass_fail", "requires_text_input", "captured_text_input", "result", "linked_process_path", "main_quest",
+    "carried_over",
 ]
 
 
@@ -216,6 +246,7 @@ def save_process(proc: Process, file_path: Path) -> None:
             "completed": proc.completed, "completed_at": proc.completed_at,
             "started": "", "started_at": "", "paused": "", "active_since": "", "duration_minutes": "", "duration_seconds": "",
             "note": "", "threshold_upper": "", "threshold_lower": "", "manual_pass_fail": "", "requires_text_input": "", "captured_text_input": "", "result": "", "linked_process_path": "", "main_quest": "",
+            "carried_over": "",
         })
         for s in proc.steps:
             w.writerow({
@@ -240,6 +271,7 @@ def save_process(proc: Process, file_path: Path) -> None:
                 "result": s.result,
                 "linked_process_path": s.linked_process_path,
                 "main_quest": s.main_quest,
+                "carried_over": s.carried_over,
             })
 
 
@@ -310,6 +342,7 @@ def _load_csv(file_path: Path) -> Process:
             result=row.get("result", ""),
             linked_process_path=row.get("linked_process_path", ""),
             main_quest=row.get("main_quest", "false").strip().lower() in ("true", "1", "yes", "on"),
+            carried_over=(row.get("carried_over") or "false").strip().lower() in ("true", "1", "yes", "on"),
         ))
     return proc
 
@@ -434,6 +467,62 @@ def create_process_instance(base_path: Path, run_id: str = "") -> Path:
     return instance_path
 
 
+# ── Linked processes ──────────────────────────────────────────────────────────
+
+def resolve_linked_path(raw: str) -> Path | None:
+    """The file a step's linked_process_path points at now: as stored, or its
+    #COMPLETE rename once the linked process was completed. None if neither exists."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    linked_path = Path(raw)
+    candidates = [linked_path]
+    if "#COMPLETE" not in linked_path.stem:
+        candidates.append(linked_path.with_name(f"{linked_path.stem}#COMPLETE{linked_path.suffix}"))
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return None
+
+
+@dataclass
+class LinkedLog:
+    """A work quest step's linked process, as its log is embedded in the quest's."""
+    path: Path | None          # its file (None: missing)
+    proc: Process | None       # loaded (None: missing or unreadable)
+    loggable: bool             # completed (and not a template): logged with the quest
+    why: str = ""              # why not, when it isn't
+
+
+def linked_logs_for(proc: Process) -> dict[int, LinkedLog]:
+    """For a work quest: each step (global index) that links a process, and that
+    process. Only a completed one is loggable (a run of a template, or a one-off
+    process): it's published with the quest and embedded in its log. A template
+    still linked (never run: its runs are copies) is left alone, as is anything
+    not complete."""
+    result: dict[int, LinkedLog] = {}
+    if proc.kind != "work_quest":
+        return result
+    for idx, step in enumerate(proc.steps):
+        if not step.linked_process_path.strip():
+            continue
+        path = resolve_linked_path(step.linked_process_path)
+        if path is None or path.suffix != ".prcss":
+            result[idx] = LinkedLog(path, None, False, "file not found")
+            continue
+        try:
+            linked = load_process(path)
+        except OSError:
+            result[idx] = LinkedLog(path, None, False, "file not readable")
+            continue
+        if is_base_process(path) and linked.spawn_instances:
+            result[idx] = LinkedLog(path, linked, False, "a template, not run yet")
+            continue
+        done = "#COMPLETE" in path.name or linked.completed or linked.is_fully_complete()
+        result[idx] = LinkedLog(path, linked, done, "" if done else "not complete")
+    return result
+
+
 # ── Log generation / publishing ───────────────────────────────────────────────
 
 def _hours_text(minutes: int) -> str:
@@ -448,9 +537,28 @@ def _format_log_timestamp(value: str) -> str:
     return dt.strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
 
 
+# Typographic characters outside Latin-1 that the PDF fonts' WinAnsiEncoding
+# has anyway (in the 0x80-0x9F range Latin-1 leaves for control codes): written
+# as those bytes. Anything else outside Latin-1 becomes "?" rather than stopping
+# the log being written (Mike, 2026-11-16: a "Joel’s" did).
+_WINANSI_EXTRA = {
+    "€": "\x80", "‚": "\x82", "ƒ": "\x83", "„": "\x84", "…": "\x85",
+    "†": "\x86", "‡": "\x87", "ˆ": "\x88", "‰": "\x89", "Š": "\x8a",
+    "‹": "\x8b", "Œ": "\x8c", "Ž": "\x8e", "‘": "\x91", "’": "\x92",
+    "“": "\x93", "”": "\x94", "•": "\x95", "–": "\x96", "—": "\x97",
+    "˜": "\x98", "™": "\x99", "š": "\x9a", "›": "\x9b", "œ": "\x9c",
+    "ž": "\x9e", "Ÿ": "\x9f",
+}
+
+
+def _pdf_safe(text: str) -> str:
+    """`text` as characters the PDF's Latin-1 content streams can carry."""
+    return "".join(_WINANSI_EXTRA.get(ch, ch if ord(ch) < 256 else "?") for ch in text)
+
+
 def _pdf_escape(text: str) -> str:
     return (
-        text.replace("\\", "\\\\")
+        _pdf_safe(text).replace("\\", "\\\\")
         .replace("(", "\\(")
         .replace(")", "\\)")
         .replace("\r", "")
@@ -581,6 +689,87 @@ def _wrap_to_width(text: str, *, font: str, size: int, width: float, first_line_
     return lines
 
 
+# ── Watermark (the logo, from its SVG) ────────────────────────────────────────
+
+_SVG_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def _svg_path_to_pdf(d: str) -> str:
+    """An SVG path's `d` as PDF path operators (m, l, c, h), in the SVG's own
+    units (y down: the caller flips it). Handles M L H V C S Z, absolute and
+    relative (what the logo uses)."""
+    ops: list[str] = []
+    x = y = sx = sy = 0.0
+    last_ctrl: tuple[float, float] | None = None
+    for cmd, args in re.findall(r"([MmLlHhVvCcSsZz])([^MmLlHhVvCcSsZz]*)", d):
+        nums = [float(n) for n in _SVG_NUMBER.findall(args)]
+        rel = cmd.islower()
+        c = cmd.upper()
+        if c == "Z":
+            ops.append("h")
+            x, y = sx, sy
+            last_ctrl = None
+            continue
+        if c in "MLHV":
+            step = 1 if c in "HV" else 2
+            for k in range(0, len(nums), step):
+                if c == "H":
+                    x = nums[k] + (x if rel else 0.0)
+                elif c == "V":
+                    y = nums[k] + (y if rel else 0.0)
+                else:
+                    nx, ny = nums[k], nums[k + 1]
+                    x, y = (x + nx, y + ny) if rel else (nx, ny)
+                if c == "M" and k == 0:
+                    ops.append(f"{x:.3f} {y:.3f} m")
+                    sx, sy = x, y
+                else:
+                    ops.append(f"{x:.3f} {y:.3f} l")   # (M's later pairs are lines, as SVG says)
+            last_ctrl = None
+            continue
+        step = 6 if c == "C" else 4
+        for k in range(0, len(nums), step):
+            ox, oy = (x, y) if rel else (0.0, 0.0)
+            if c == "C":
+                x1, y1, x2, y2, ex, ey = nums[k:k + 6]
+                x1, y1 = x1 + ox, y1 + oy
+            else:   # S: the first control point mirrors the last one
+                x2, y2, ex, ey = nums[k:k + 4]
+                x1, y1 = (2 * x - last_ctrl[0], 2 * y - last_ctrl[1]) if last_ctrl else (x, y)
+            x2, y2, ex, ey = x2 + ox, y2 + oy, ex + ox, ey + oy
+            ops.append(f"{x1:.3f} {y1:.3f} {x2:.3f} {y2:.3f} {ex:.3f} {ey:.3f} c")
+            last_ctrl = (x2, y2)
+            x, y = ex, ey
+    return "\n".join(ops)
+
+
+def _watermark_stream(page_w: float = 612.0, page_h: float = 792.0) -> str:
+    """The logo, big, pale and centred on the page: PDF operators to draw first,
+    under everything else. "" if the logo file's missing or can't be read."""
+    try:
+        svg = LOGO_SVG.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    box = re.search(r'viewBox="\s*([-\d.]+)[\s,]+([-\d.]+)[\s,]+([-\d.]+)[\s,]+([-\d.]+)\s*"', svg)
+    color = re.search(r"fill:\s*#([0-9a-fA-F]{6})", svg)
+    paths = re.findall(r'<path[^>]*\sd="([^"]+)"', svg)
+    if not box or not paths:
+        return ""
+    vx, vy, vw, vh = (float(v) for v in box.groups())
+    hexc = color.group(1) if color else "000000"
+    full = [int(hexc[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    tint = [1.0 - PDF_WATERMARK_STRENGTH * (1.0 - c) for c in full]   # (faded toward white)
+    s = PDF_WATERMARK_WIDTH / vw
+    tx = page_w / 2.0 - (vx + vw / 2.0) * s
+    ty = page_h / 2.0 + (vy + vh / 2.0) * s   # (y flipped: SVG's runs down the page)
+    parts = ["q", f"{s:.5f} 0 0 {-s:.5f} {tx:.3f} {ty:.3f} cm", f"{tint[0]:.3f} {tint[1]:.3f} {tint[2]:.3f} rg"]
+    for d in paths:
+        parts.append(_svg_path_to_pdf(d))
+        parts.append("f")
+    parts.append("Q")
+    return "\n".join(parts)
+
+
 def _build_pdf_document(page_streams: list[str]) -> bytes:
     objects: list[bytes] = []
 
@@ -647,8 +836,26 @@ def _build_pdf_document(page_streams: list[str]) -> bytes:
     return bytes(pdf)
 
 
-def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) -> bytes:
-    """A log is only ever generated for an already-#COMPLETE process/quest, and
+def grouped_descendants(proc: Process, parent_idx: int) -> list[tuple[int, Step]]:
+    """`parent_idx`'s descendants in log order (Mike, 2026-11-16: keep each group
+    together, so it's easy to follow): first its own children that have no
+    children, together right under it, then each child that has children, with
+    its whole group the same way. Within those, the quest's own order."""
+    children = proc.children_of(parent_idx)
+    out = [(i, s) for i, s in children if not proc.has_children(i)]
+    for i, s in children:
+        if proc.has_children(i):
+            out.append((i, s))
+            out += grouped_descendants(proc, i)
+    return out
+
+
+def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None,
+                           linked: dict[int, LinkedLog] | None = None) -> bytes:
+    """`linked` (a work quest's: linked_logs_for()) embeds each linked process's
+    log, boxed, under the step that links it.
+
+    A log is only ever generated for an already-#COMPLETE process/quest, and
     completion syncs top-down (a parent can't be complete unless every one of
     its descendants is), so "COMPLETE"/"DONE" status is true of every row by
     construction — printing it everywhere just repeats the obvious. Status is
@@ -658,14 +865,15 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
     """
     published_dt = published_at or datetime.now()
     published_text = published_dt.strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
+    linked = linked or {}
     is_wq = proc.kind == "work_quest"
     title = "WORK QUEST LOG" if is_wq else "PROCESS LOG"
     subject = "Work Quest" if is_wq else "Process"
     total_minutes = proc.total_clock_minutes() if is_wq else sum(step.duration_minutes for step in proc.steps)
 
-    page_width = 612.0
-    page_height = 792.0
-    margin = 48.0
+    page_width = 612.0 / PDF_TEXT_SCALE    # (the layout page: scaled up to 612 x 792 at the end)
+    page_height = 792.0 / PDF_TEXT_SCALE
+    margin = 48.0 / PDF_TEXT_SCALE
     content_width = page_width - margin * 2
     indent_step = 13.0
 
@@ -681,6 +889,8 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
     color_rule  = (0.85, 0.85, 0.83)
 
     def status_rgb(text: str) -> tuple[float, float, float]:
+        if text == "CARRIED OVER":
+            return PDF_CARRIED_TEXT_COLOR
         if text in ("PASS", "COMPLETE", "DONE"):
             return color_good
         if text == "FAIL":
@@ -732,20 +942,127 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
                     draw_text(cursor_top, line, size=size, font=font, rgb=rgb, x=x + label_w)
                 cursor_top += line_h
 
-    def write_subtask_line(text: str, *, x: float, width: float, size: float, tag: str, tag_rgb: tuple[float, float, float]) -> None:
+    def write_subtask_line(text: str, *, x: float, width: float, size: float, tag: str, tag_rgb: tuple[float, float, float],
+                           font: str = "F1", rgb: tuple[float, float, float] | None = None, line_h: float = 13.0) -> None:
         # Like write_note, but the leading "tag" (if any) is bold and colored
         # by status while the rest of the (hanging-indented) line stays in
-        # the plain subtask color — a plain "DONE" tag is simply omitted.
+        # its subtask color — a plain "DONE" tag is simply omitted.
         nonlocal cursor_top
+        rgb = rgb or subtask_color
         tag_w = _text_width(tag, font="F2", size=size) if tag else 0.0
-        lines = _wrap_to_width(text, font="F1", size=size, width=width - tag_w)
-        ensure_space(len(lines) * 13.0)
+        lines = _wrap_to_width(text, font=font, size=size, width=width - tag_w)
+        ensure_space(len(lines) * line_h)
         for idx, line in enumerate(lines):
             lx = x + tag_w if tag else x
             if idx == 0 and tag:
                 draw_text(cursor_top, tag, size=size, font="F2", rgb=tag_rgb, x=x)
-            draw_text(cursor_top, line, size=size, font="F1", rgb=subtask_color, x=lx)
-            cursor_top += 13.0
+            draw_text(cursor_top, line, size=size, font=font, rgb=rgb, x=lx)
+            cursor_top += line_h
+
+    def parent_color(rel: int) -> tuple[float, float, float]:
+        # The color of a parent `rel` levels under its task (0: the task itself, black).
+        if rel == 0:
+            return color_title
+        return PDF_SUBTASK_PARENT_COLORS[(rel - 1) % len(PDF_SUBTASK_PARENT_COLORS)]
+
+    def subtask_style(rel: int, has_kids: bool) -> tuple[float, str, tuple[float, float, float]]:
+        # (size, font, color) for a subtask `rel` levels under its task. A parent:
+        # bold, the first level biggest and each deeper level a step smaller (never
+        # below PDF_SUBTASK_BRANCH_MIN), in the next color down the line. A subtask
+        # with no children: plain and smaller, in its parent's color, so a parent
+        # and its children read as one group.
+        if has_kids:
+            size = round(max(PDF_SUBTASK_BRANCH_MIN, PDF_SUBTASK_L2_SIZE - PDF_SUBTASK_BRANCH_STEP * (rel - 1)), 2)
+            return (size, "F2", parent_color(rel))
+        return (PDF_SUBTASK_LEAF_SIZE, "F1", parent_color(rel - 1))
+
+    link_pad = 7.0   # (a linked box's padding)
+
+    def open_link_box(x: float, height: float) -> tuple[int, int, float, float]:
+        # Called just before drawing a task that links a process (Mike, 2026-11-16:
+        # it should be clear which task the process was built off): the box will
+        # start here, round the task and its process both. Keeps the task and the
+        # start of the process on one page.
+        nonlocal cursor_top
+        ensure_space(height + link_pad + 50.0)
+        start = (len(pages), len(pages[-1]), cursor_top, x)
+        cursor_top += link_pad
+        return start
+
+    def write_linked_box(entry: LinkedLog, start: tuple[int, int, float, float] | None = None) -> None:
+        # A linked process's log under its work quest item (Mike, 2026-11-16): in
+        # its own color inside a tinted, outlined box that also holds the task it
+        # was built off (opened by open_link_box() above that task), with a rule
+        # between them, so it reads as a separate log of that task. A box broken
+        # by a page end is closed there and reopened on the next.
+        nonlocal cursor_top
+        pad = link_pad
+        same_page = start is not None and start[0] == len(pages)
+        box_x = min(margin + 12.0, start[3] - pad) if same_page else margin + 12.0
+        box_w = margin + content_width - box_x
+        inner_x = margin + 12.0 + pad
+        inner_w = margin + content_width - pad - inner_x
+        color = PDF_LINKED_TEXT_COLOR
+        rows: list[tuple[str, float, float, str, float]] = []   # text, x offset, size, font, line height
+
+        def add(text: str, *, x_off: float = 0.0, size: float = 9.0, font: str = "F1") -> None:
+            for line in _wrap_to_width(text, font=font, size=size, width=inner_w - x_off):
+                rows.append((line, x_off, size, font, size + 3.5))
+
+        lp = entry.proc
+        if lp is None or not entry.loggable:
+            name = entry.path.name if entry.path is not None else "(missing file)"
+            add(f"Linked process {name}: {entry.why}, not logged", size=8.5, font="F3")
+        else:
+            mins = sum(s.duration_minutes for s in lp.steps)
+            add(f"LINKED PROCESS LOG  ·  {lp.name}", size=10.5, font="F2")
+            meta = [f"{lp.done_top}/{lp.total_top} tasks"]
+            if mins:   # (most processes don't record hours: no "0.00 h" line)
+                meta.append(f"{_hours_text(mins)} ({mins} min)")
+            if lp.completed_at:
+                meta.append(f"completed {_format_log_timestamp(lp.completed_at)}")
+            add("  ·  ".join(meta), size=8.5, font="F3")
+            for s in lp.steps:
+                x_off = 12.0 * max(0, s.level - 1)
+                status = s.result or ("" if s.completed else "OPEN")
+                text = (f"{status}  " if status else "") + s.label
+                if s.completed_at:
+                    text += f"  ·  {_format_log_timestamp(s.completed_at)}"
+                if s.duration_minutes:
+                    text += f"  ·  {_hours_text(s.duration_minutes)} ({s.duration_minutes} min)"
+                if s.captured_text_input:
+                    text += f"  ·  input: {s.captured_text_input}"
+                add(text, x_off=x_off, size=9.5 if s.level == 1 else 8.5, font="F2" if s.level == 1 else "F1")
+                if s.note:
+                    add(f"note: {s.note}", x_off=x_off + 10.0, size=8.0, font="F3")
+
+        if same_page:
+            seg_top = start[2]
+            seg_index = start[1]   # (under the task's text too)
+            cursor_top += 3.0
+            draw_rect(cursor_top, 0.8, fill_rgb=color, x=inner_x, width=inner_w)   # the rule: task above, its process below
+            cursor_top += 6.0
+        else:
+            cursor_top += 6.0
+            ensure_space(rows[0][4] + pad * 2)
+            seg_top = cursor_top
+            seg_index = len(pages[-1])   # the box goes under its text: inserted here once its height's known
+            cursor_top += pad
+        for text, x_off, size, font, line_h in rows:
+            if cursor_top + line_h + pad > page_height - margin:
+                height = cursor_top + pad - seg_top
+                pages[-1].insert(seg_index, _pdf_stream_rect(box_x, page_height - seg_top - height, box_w, height,
+                        fill_rgb=PDF_LINKED_BOX_FILL, stroke_rgb=color, line_width=1.2))
+                new_page()
+                seg_top = cursor_top
+                seg_index = len(pages[-1])
+                cursor_top += pad
+            draw_text(cursor_top, text, size=size, font=font, rgb=color, x=inner_x + x_off)
+            cursor_top += line_h
+        height = cursor_top + pad - seg_top
+        pages[-1].insert(seg_index, _pdf_stream_rect(box_x, page_height - seg_top - height, box_w, height,
+                fill_rgb=PDF_LINKED_BOX_FILL, stroke_rgb=color, line_width=1.2))
+        cursor_top += pad + 4.0
 
     # ---- Header banner (single compact band) --------------------------------
     ensure_space(52)
@@ -786,7 +1103,8 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
             i += 1
             continue
 
-        descendants = proc.descendants_of(i)
+        # (A work quest's groups kept together; a process keeps its checklist order.)
+        descendants = grouped_descendants(proc, i) if is_wq else proc.descendants_of(i)
 
         # Reserve the divider + heading together so a page break can't strand
         # a lone rule at the bottom of one page with the heading on the next.
@@ -796,10 +1114,13 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
             cursor_top += 14.0
         first_section = False
 
-        status = step.result or ("COMPLETE" if step.completed else "PENDING")
+        # (Carried over, Mike 2026-11-16: finished by Carry Over, handed on to the next
+        # work quest; labelled so it isn't read as done here.)
+        status = "CARRIED OVER" if step.carried_over else (step.result or ("COMPLETE" if step.completed else "PENDING"))
         show_badge = status != "COMPLETE"
         badge_w = _text_width(status, font="F2", size=8) + 12.0 if show_badge else 0.0
         title_lines = _wrap_to_width(step.label, font="F2", size=13, width=content_width, first_line_width=content_width - badge_w - (10.0 if show_badge else 0.0))
+        link_start = open_link_box(margin, len(title_lines) * 16.0) if i in linked else None
         ensure_space(len(title_lines) * 16.0)
         if show_badge:
             badge_rgb = status_rgb(status)
@@ -830,26 +1151,38 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
             cursor_top += 2.0
             write_note(step.note, x=margin, width=content_width, size=9.5, font="F3", rgb=note_color, line_h=12.5, label="note: ")
 
+        if i in linked:
+            write_linked_box(linked[i], link_start)
+
         if descendants:
             cursor_top += 5.0
-            for _, sub in descendants:
-                sub_indent = indent_step * max(0, sub.level - step.level - 1)
+            for sub_idx, sub in descendants:
+                rel = sub.level - step.level
+                sub_indent = indent_step * max(0, rel - 1)
                 sub_x = margin + 12.0 + sub_indent
                 sub_width = content_width - 12.0 - sub_indent
+                size, font, rgb = subtask_style(rel, proc.has_children(sub_idx))
 
-                sub_status = sub.result or ("DONE" if sub.completed else "OPEN")
+                sub_status = "CARRIED OVER" if sub.carried_over else (sub.result or ("DONE" if sub.completed else "OPEN"))
+                if sub.carried_over:
+                    font, rgb = "F1", PDF_CARRIED_TEXT_COLOR   # (in its own color, not as part of its group's work)
                 rest = sub.label
                 if sub.completed_at:
                     rest += f"  ·  {_format_log_timestamp(sub.completed_at)}"
                 if is_wq or sub.duration_minutes:
                     rest += f"  ·  {_hours_text(sub.duration_minutes)} ({sub.duration_minutes} min)"
 
-                cursor_top += 2.0
+                cursor_top += 5.0 if rel == 1 else 2.0   # (a little air above each first-level group)
+                link_start = open_link_box(sub_x, size + 3.5) if sub_idx in linked else None
                 tag = "" if sub_status == "DONE" else f"{sub_status}  "
-                write_subtask_line(rest, x=sub_x, width=sub_width, size=9.5, tag=tag, tag_rgb=status_rgb(sub_status))
+                write_subtask_line(rest, x=sub_x, width=sub_width, size=size, tag=tag, tag_rgb=status_rgb(sub_status),
+                                   font=font, rgb=rgb, line_h=size + 3.5)
 
                 if sub.note:
                     write_note(sub.note, x=sub_x + 10.0, width=sub_width - 10.0, size=8.5, font="F3", rgb=subtask_note_color, line_h=11, label="")
+
+                if sub_idx in linked:
+                    write_linked_box(linked[sub_idx], link_start)
 
         cursor_top += 12.0
         i = proc.subtree_end_exclusive(i)
@@ -861,12 +1194,32 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None) 
 
     total_pages = len(pages)
     for idx, page in enumerate(pages, start=1):
-        page.append(_pdf_stream_text(margin, 26.0, f"VeriTrakk  ·  Page {idx} of {total_pages}", font="F1", size=8, rgb=(0.55, 0.55, 0.55)))
+        page.append(_pdf_stream_text(margin, 26.0 / PDF_TEXT_SCALE, f"VeriTrakk  ·  Page {idx} of {total_pages}", font="F1", size=8, rgb=(0.55, 0.55, 0.55)))
 
-    return _build_pdf_document(["\n".join(page) for page in pages if page])
+    scale = f"q {PDF_TEXT_SCALE:.4f} 0 0 {PDF_TEXT_SCALE:.4f} 0 0 cm"   # (the layout page scaled up to fill the real one)
+    watermark = _watermark_stream()   # (drawn first: under everything on the page)
+    return _build_pdf_document([(watermark + "\n" if watermark else "") + scale + "\n" + "\n".join(page) + "\nQ"
+                                for page in pages if page])
 
 
-def generate_log_text(proc: Process, published_at: datetime | None = None) -> str:
+def _linked_text_block(entry: LinkedLog, indent: str, published_at: datetime | None) -> list[str]:
+    """A linked process's log, framed, to go under its work quest item."""
+    if entry.proc is None or not entry.loggable:
+        name = entry.path.name if entry.path is not None else "(missing file)"
+        return [f"{indent}[ linked process {name}: {entry.why}, not logged ]"]
+    inner = generate_log_text(entry.proc, published_at)
+    rule = "-" * 58
+    lines = [f"{indent}+-- LINKED PROCESS LOG: {entry.proc.name} --"]
+    lines += [f"{indent}| {line}".rstrip() for line in inner.splitlines()]
+    lines.append(f"{indent}+{rule}")
+    return lines
+
+
+def generate_log_text(proc: Process, published_at: datetime | None = None,
+                      linked: dict[int, LinkedLog] | None = None) -> str:
+    """`linked` (a work quest's: linked_logs_for()) embeds each linked process's
+    log, framed, under the step that links it."""
+    linked = linked or {}
     W = 64
     now = (published_at or datetime.now()).strftime("%Y-%m-%d %I:%M:%S %p").replace(" 0", " ", 1)
     is_wq = proc.kind == "work_quest"
@@ -896,7 +1249,9 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
             i += 1
             continue
 
-        if step.result:
+        if step.carried_over:
+            status = "CARRIED OVER (to the next work quest)"
+        elif step.result:
             status = f"[{step.result}]  COMPLETE"
         elif step.completed:
             status = "COMPLETE"
@@ -927,9 +1282,14 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
             if step.threshold_lower:
                 parts.append(f"LT={step.threshold_lower}")
             lines.append(f"     Thresh : {', '.join(parts)}")
+        if i in linked:
+            lines += _linked_text_block(linked[i], "     ", published_at)
 
-        for _, sub in proc.descendants_of(i):
-            if sub.result:
+        # (A work quest's groups kept together; a process keeps its checklist order.)
+        for sub_idx, sub in (grouped_descendants(proc, i) if is_wq else proc.descendants_of(i)):
+            if sub.carried_over:
+                sym = "[CARRIED OVER]"
+            elif sub.result:
                 sym = f"[{sub.result}]"
             elif sub.completed:
                 sym = "[DONE]"
@@ -952,6 +1312,8 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
             lines.append(sub_line)
             if sub.note:
                 lines.append(f"               NOTE: {sub.note}")
+            if sub_idx in linked:
+                lines += _linked_text_block(linked[sub_idx], f"          {indent}", published_at)
 
         i = proc.subtree_end_exclusive(i)
         lines.append("")
@@ -969,25 +1331,90 @@ def generate_log_text(proc: Process, published_at: datetime | None = None) -> st
     return "\n".join(lines)
 
 
+def _log_stem(src_path: Path) -> str:
+    return src_path.stem.replace("#COMPLETE", "").strip()
+
+
+def log_pdf_path(src_path: Path) -> Path:
+    """Where publishing `src_path` writes its PDF log: beside it."""
+    return src_path.parent / (_log_stem(src_path) + (".wrkqstlog" if src_path.suffix == ".wrkqst" else ".prcsslog") + ".pdf")
+
+
+def archive_folder_for(src_path: Path) -> Path:
+    """The folder publishing `src_path` puts its files in (Mike, 2026-11-16: keep
+    them, don't delete them): "<name> Files" beside it, "(2)", "(3)"... if taken."""
+    base = src_path.parent / f"{_log_stem(src_path)} Files"
+    folder, n = base, 2
+    while folder.exists():
+        folder = src_path.parent / f"{base.name} ({n})"
+        n += 1
+    return folder
+
+
+@dataclass
+class LogPlan:
+    """What logging a work quest (or process) will do, for the confirmation."""
+    pdf_path: Path
+    folder: Path
+    moving: list[Path]               # the source file, then the linked processes logged with it
+    staying: list[tuple[str, str]]   # linked processes left where they are: (name, why)
+
+
+def log_plan(proc: Process, src_path: Path) -> LogPlan:
+    moving = [src_path]
+    staying: list[tuple[str, str]] = []
+    for entry in linked_logs_for(proc).values():
+        if entry.loggable and entry.path is not None:
+            if entry.path not in moving:
+                moving.append(entry.path)
+        else:
+            staying.append((entry.path.name if entry.path is not None else "(missing file)", entry.why))
+    return LogPlan(log_pdf_path(src_path), archive_folder_for(src_path), moving, staying)
+
+
+def _move_into(path: Path, folder: Path) -> Path:
+    target = folder / path.name
+    n = 2
+    while target.exists():
+        target = folder / f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    shutil.move(str(path), str(target))
+    return target
+
+
 def publish_process(proc: Process, src_path: Path) -> Path:
-    """Write text and PDF logs, copy them to data/logs/, delete source. Returns the text log path."""
+    """Write the PDF log (beside the source, and a copy in data/logs/), then move
+    the source and the linked processes logged with it into a folder beside it
+    (archive_folder_for()). Returns the PDF's path.
+
+    (Mike, 2026-11-16) The log is just the PDF: no .prcsslog / .wrkqstlog text
+    files. Nothing is deleted any more: the files go in "<name> Files", so they
+    can be opened again. A work quest's completed linked processes are embedded
+    in its PDF under the item that links them, and moved into that folder too;
+    the quest file there has its links pointed at them. A linked template, or a
+    process that isn't complete, is left where it is and noted in the PDF.
+    """
     published_at = datetime.now()
-    log_text = generate_log_text(proc, published_at)
-    pdf_bytes = generate_log_pdf_bytes(proc, published_at)
-    stem     = src_path.stem.replace("#COMPLETE", "").strip()
-    log_name = stem + (".wrkqstlog" if src_path.suffix == ".wrkqst" else ".prcsslog")
-    pdf_name = log_name + ".pdf"
-    log_path = src_path.parent / log_name
-    pdf_path = src_path.parent / pdf_name
-
-    log_path.write_text(log_text, encoding="utf-8")
+    linked = linked_logs_for(proc)
+    pdf_path = log_pdf_path(src_path)
+    pdf_bytes = generate_log_pdf_bytes(proc, published_at, linked)
     pdf_path.write_bytes(pdf_bytes)
-
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    (LOGS_DIR / log_name).write_text(log_text, encoding="utf-8")
-    (LOGS_DIR / pdf_name).write_bytes(pdf_bytes)
+    (LOGS_DIR / pdf_path.name).write_bytes(pdf_bytes)
 
+    folder = archive_folder_for(src_path)
+    folder.mkdir(parents=True)
+    moved: dict[Path, Path] = {}
+    for entry in linked.values():
+        if entry.loggable and entry.path is not None and entry.path not in moved and entry.path.exists():
+            moved[entry.path] = _move_into(entry.path, folder)
     if src_path.exists():
-        src_path.unlink()
-
-    return log_path
+        archived = _move_into(src_path, folder)
+        relink = {idx: moved[e.path] for idx, e in linked.items() if e.path in moved}
+        if relink:   # (the archived quest's links point at the archived processes)
+            kept = load_process(archived)
+            for idx, new_path in relink.items():
+                if idx < len(kept.steps):
+                    kept.steps[idx].linked_process_path = str(new_path)
+            save_process(kept, archived)
+    return pdf_path
