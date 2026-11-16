@@ -14,6 +14,13 @@ a git tag `vX.Y.Z`.
 
 ---
 
+## Unreleased
+
+### App
+- The home screen's left panel shows the Westbound Designs logo, drawn in text
+  (Braille dots, in the logo's cyan) from `assets/logo_with_circle_nowords.svg`,
+  sized to the panel. The matrix rain is gone.
+
 ## 1.0.0 (2026-11-16)
 
 The first numbered release. Everything before it is in the git history.
