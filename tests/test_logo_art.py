@@ -38,3 +38,29 @@ def test_path_commands():
 
 def test_missing_file_draws_nothing(tmp_path):
     assert Logo.load(tmp_path / "missing.svg") is None
+
+
+def test_small_leaves_out_the_inner_arrows_big_keeps_them(monkeypatch):
+    # (Mike, 2026-11-16: at the run panel's size they only blurred into the rest.)
+    from src import logo_art
+    logo = Logo.load(storage.LOGO_SVG)
+    small = logo.braille(20, 10)
+    monkeypatch.setattr(logo_art, "SMALL_HIDE", set())
+    assert logo.braille(20, 10) != small                    # (they'd be there otherwise)
+    big = logo.braille(40, 20)                               # 80 dots across: every part drawn
+    monkeypatch.setattr(logo_art, "SMALL_HIDE", {2, 3})
+    assert logo.braille(40, 20) == big
+
+
+def test_ring_as_thick_on_the_right_as_the_left():
+    # (Mike, 2026-11-16: the right edge was cut off: 95.99 dots wide was cut down to 95.)
+    from src.logo_art import _DOT_BITS
+    logo = Logo.load(storage.LOGO_SVG)
+    for cols, rows in [(48, 24), (49, 24), (20, 10)]:
+        mid = logo.braille(cols, rows, corner=True)[rows // 2]
+        dots = "".join("#" if (ord(c) - 0x2800 if c != " " else 0) & _DOT_BITS[(dx, 1)] else "."
+                       for c in mid for dx in range(2))
+        left = len(dots) - len(dots.lstrip("#"))
+        inner = dots.rstrip(".")
+        right = len(inner) - len(inner.rstrip("#"))
+        assert left == right > 0, (cols, rows, dots)
