@@ -16,6 +16,7 @@ from typing import Iterable
 
 from rich.text import Text
 from textual import events
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -109,6 +110,31 @@ def _progress_bar(pct: float, width: int = 20) -> str:
     return "\u2588" * filled + "\u2591" * (width - filled)
 
 
+# Time editing (T): the part being edited, hours, minutes or seconds, in this color,
+# and the clock's outline while editing (Mike, 2026-11-16).
+_TIME_EDIT = "#ff8c00"   # orange
+
+
+def _append_time(t: Text, seconds: int | None, edit_field: int | None = None) -> bool:
+    """Append "   hh:mm:ss" to a tree label: dim teal, or, while it's the time
+    being edited (`edit_field` 0 hours, 1 minutes, 2 seconds), that part bold
+    orange (shown even at zero). Returns whether anything was appended."""
+    if edit_field is None:
+        if seconds is None or seconds <= 0:
+            return False
+        h, m, sec = seconds // 3600, (seconds % 3600) // 60, seconds % 60
+        t.append(f"   {h:02d}:{m:02d}:{sec:02d}", style=f"dim {_TEAL}")
+        return True
+    total = max(0, seconds or 0)
+    parts = [total // 3600, (total % 3600) // 60, total % 60]
+    t.append("   ")
+    for k, value in enumerate(parts):
+        t.append(f"{value:02d}", style=f"bold reverse {_TIME_EDIT}" if k == edit_field else f"bold {_TEAL}")
+        if k < 2:
+            t.append(":", style=f"bold {_TEAL}")
+    return True
+
+
 def _step_label(
     step: Step,
     *,
@@ -117,8 +143,10 @@ def _step_label(
     sub_done: int | None = None,
     sub_total: int | None = None,
     live_seconds: int | None = None,
+    edit_field: int | None = None,
 ) -> Text:
-    """Rich Text label for a step node in the run-mode tree."""
+    """Rich Text label for a step node in the run-mode tree. `edit_field`: its
+    time's being edited (T), that part highlighted."""
     display_label = f"{number_prefix} {step.label}" if number_prefix else step.label
     if step.main_quest:
         display_label = f"!!! {display_label} !!!"
@@ -126,11 +154,13 @@ def _step_label(
         display_label = f"[P] {display_label}"
     if step.completed:
         if step.result == "PASS":
-            t = Text(f"\u2713  {display_label}", style=f"bold {_GREEN}")
+            t = Text(f"✓  {display_label}", style=f"bold {_GREEN}")
             t.append("   PASS", style=f"bold {_GREEN}")
+            _append_time(t, live_seconds if edit_field is not None else None, edit_field)
         elif step.result == "FAIL":
-            t = Text(f"\u2717  {display_label}", style="bold red")
+            t = Text(f"✗  {display_label}", style="bold red")
             t.append("   FAIL", style="bold red")
+            _append_time(t, live_seconds if edit_field is not None else None, edit_field)
         else:
             ts = ""
             if step.completed_at:
@@ -139,50 +169,33 @@ def _step_label(
                     ts = f"   {dt.strftime('%I:%M %p').lstrip('0')}"
                 except ValueError:
                     pass
-            t = Text(f"\u2713  {display_label}", style=_GREEN)
+            t = Text(f"✓  {display_label}", style=_GREEN)
             if ts:
                 t.append(ts, style=f"dim {_GREEN}")
-            if live_seconds is not None and live_seconds > 0:
-                h = live_seconds // 3600
-                m = (live_seconds % 3600) // 60
-                s = live_seconds % 60
-                t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
-            elif step.duration_minutes > 0:
+            if not _append_time(t, live_seconds, edit_field) and step.duration_minutes > 0:
                 h = step.duration_minutes // 60
                 m = step.duration_minutes % 60
                 t.append(f"   {h:02d}:{m:02d}", style=f"dim {_TEAL}")
     elif step.started and step.paused:
-        t = Text(f"\u25d4  {display_label}", style=f"bold {_PURPLE}")
+        t = Text(f"◔  {display_label}", style=f"bold {_PURPLE}")
         t.append("   PAUSED", style=f"bold {_PURPLE}")
-        if live_seconds is not None and live_seconds > 0:
-            h = live_seconds // 3600
-            m = (live_seconds % 3600) // 60
-            s = live_seconds % 60
-            t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
+        _append_time(t, live_seconds, edit_field)
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     elif step.started:
-        t = Text(f"\u25d4  {display_label}", style=f"bold {_BLUE}")
-        if live_seconds is not None and live_seconds > 0:
-            h = live_seconds // 3600
-            m = (live_seconds % 3600) // 60
-            s = live_seconds % 60
-            t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
+        t = Text(f"◔  {display_label}", style=f"bold {_BLUE}")
+        _append_time(t, live_seconds, edit_field)
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
     else:
-        t = Text(f"\u25cb  {display_label}")
-        if live_seconds is not None and live_seconds > 0:
-            h = live_seconds // 3600
-            m = (live_seconds % 3600) // 60
-            s = live_seconds % 60
-            t.append(f"   {h:02d}:{m:02d}:{s:02d}", style=f"dim {_TEAL}")
+        t = Text(f"○  {display_label}")
+        _append_time(t, live_seconds, edit_field)
         if sub_done is not None and sub_total:
             t.append(f"  ({sub_done}/{sub_total})", style=f"dim {_KHAKI}")
         if step.has_threshold():
-            t.append("  \u2299", style=_TEAL)
+            t.append("  ⊙", style=_TEAL)
         if step.note:
-            t.append("  \xb7", style=f"dim {_KHAKI}")
+            t.append("  ·", style=f"dim {_KHAKI}")
     return t
 
 
@@ -237,6 +250,31 @@ class LogoArt(Static):
         # One column narrower than the space, so the logo's right edge never sits
         # against the boundary (Mike, 2026-11-16: it was clipping there).
         self.update("\n".join(self._logo.braille(max(0, size[0] - 1), size[1], self._corner)))
+
+
+class ClockFace(Horizontal):
+    """The work quest clock: hours, minutes and seconds as three digit displays
+    (so the part being edited can be orange), colons between. While editing time
+    (T), a click on it picks the clock to edit (Mike, 2026-11-16)."""
+
+    def compose(self) -> ComposeResult:
+        yield Digits("00", classes="clock_part")
+        yield Digits(":", classes="clock_sep")
+        yield Digits("00", classes="clock_part")
+        yield Digits(":", classes="clock_sep")
+        yield Digits("00", classes="clock_part")
+
+    def show(self, seconds: int, edit_field: int | None = None) -> None:
+        total = max(0, seconds)
+        values = [total // 3600, (total % 3600) // 60, total % 60]
+        for k, part in enumerate(self.query(".clock_part").results(Digits)):
+            part.update(f"{values[k]:02d}")
+            part.set_class(k == edit_field, "editing")
+
+    def on_click(self, event: events.Click) -> None:
+        if getattr(self.app, "_time_edit", False):
+            self.app._time_edit_pick("clock")
+            event.stop()
 
 
 # ── Specialized DirectoryTree subclasses ──────────────────────────────────────
@@ -466,126 +504,6 @@ class NoteScreen(ModalScreen):
 
     def on_input_submitted(self, _: Input.Submitted) -> None:
         self.action_next_note()
-
-
-class EditTimeScreen(ModalScreen):
-    """Edit a step duration with hour/minute/second keyboard controls."""
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("enter", "save", "Save", show=False),
-        Binding("left", "prev_field", "Previous Field", show=False, priority=True),
-        Binding("right", "next_field", "Next Field", show=False, priority=True),
-        Binding("up", "increment", "Increase", show=False, priority=True),
-        Binding("down", "decrement", "Decrease", show=False, priority=True),
-    ]
-
-    def __init__(self, title: str, subtitle: str, total_seconds: int) -> None:
-        super().__init__()
-        self._title = title
-        self._subtitle = subtitle
-        self._total_seconds = max(0, total_seconds)
-        self._field_idx = 0
-
-    @staticmethod
-    def _split_seconds(total_seconds: int) -> tuple[int, int, int]:
-        total = max(0, total_seconds)
-        hours = total // 3600
-        minutes = (total % 3600) // 60
-        seconds = total % 60
-        return hours, minutes, seconds
-
-    @staticmethod
-    def _join_seconds(hours: int, minutes: int, seconds: int) -> int:
-        return max(0, hours) * 3600 + max(0, minutes) * 60 + max(0, seconds)
-
-    def _time_text(self) -> Text:
-        hours, minutes, seconds = self._split_seconds(self._total_seconds)
-        parts = [hours, minutes, seconds]
-        labels = ["hours", "minutes", "seconds"]
-        text = Text()
-
-        for idx, (value, label) in enumerate(zip(parts, labels, strict=True)):
-            if idx == self._field_idx:
-                text.append(f"{value:02d}", style=f"bold {_GOLD}")
-            else:
-                text.append(f"{value:02d}", style=f"dim {_TEAL}")
-            if idx < 2:
-                text.append(":", style="dim")
-
-        text.append(f"   {labels[self._field_idx].upper()}", style=f"bold {_SALMON}")
-        return text
-
-    def _refresh_time(self) -> None:
-        self.query_one("#edit_time_value", Static).update(self._time_text())
-
-    def _adjust_current_field(self, delta: int) -> None:
-        hours, minutes, seconds = self._split_seconds(self._total_seconds)
-
-        if self._field_idx == 0:
-            hours = max(0, hours + delta)
-        elif self._field_idx == 1:
-            minutes = max(0, minutes + delta)
-        else:
-            seconds = max(0, seconds + delta)
-
-        self._total_seconds = self._join_seconds(hours, minutes, seconds)
-        self._refresh_time()
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal_box"):
-            yield Static(self._title, id="modal_title")
-            yield Static(self._subtitle, id="thresh_step_label")
-            yield Static("Left/Right changes field. Up/Down changes value.", id="thresh_bounds")
-            yield Static("", id="edit_time_value")
-            with Horizontal(id="modal_btns"):
-                yield Button("Save", variant="primary", id="btn_save")
-                yield Button("Cancel", variant="default", id="btn_cancel")
-
-    def on_mount(self) -> None:
-        self.app.set_focus(None)
-        for button in self.query(Button):
-            button.can_focus = False
-        self._refresh_time()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_save(self) -> None:
-        self.dismiss(self._total_seconds)
-
-    def action_prev_field(self) -> None:
-        self._field_idx = (self._field_idx - 1) % 3
-        self._refresh_time()
-
-    def action_next_field(self) -> None:
-        self._field_idx = (self._field_idx + 1) % 3
-        self._refresh_time()
-
-    def action_increment(self) -> None:
-        self._adjust_current_field(1)
-
-    def action_decrement(self) -> None:
-        self._adjust_current_field(-1)
-
-    def on_key(self, event) -> None:
-        if event.key == "left":
-            self.action_prev_field()
-            event.stop()
-        elif event.key == "right":
-            self.action_next_field()
-            event.stop()
-        elif event.key == "up":
-            self.action_increment()
-            event.stop()
-        elif event.key == "down":
-            self.action_decrement()
-            event.stop()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_save":
-            self.action_save()
-        else:
-            self.action_cancel()
 
 
 class ThresholdScreen(ModalScreen):
@@ -1132,36 +1050,6 @@ class ConfirmScreen(ModalScreen):
         self.dismiss(event.button.id == "btn_yes")
 
 
-class EditTimeChoiceScreen(ModalScreen):
-    """Choose whether to edit quest time or total clock in/out time."""
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal_box"):
-            yield Static("Edit Time", id="modal_title")
-            yield Static("What do you want to change?", id="confirm_msg")
-            with Horizontal(id="modal_btns"):
-                yield Button("Quest Time", variant="success", id="btn_quest")
-                yield Button("Clock In/Out Time", variant="primary", id="btn_clock")
-                yield Button("Cancel", variant="default", id="btn_cancel")
-
-    def on_mount(self) -> None:
-        self.app.set_focus(None)
-        for button in self.query(Button):
-            button.can_focus = False
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_quest":
-            self.dismiss("quest")
-        elif event.button.id == "btn_clock":
-            self.dismiss("clock")
-        else:
-            self.dismiss(None)
-
-
 class FilePickerScreen(ModalScreen):
     """Popup file/directory picker – replaces left-sidebar trees."""
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
@@ -1374,6 +1262,15 @@ class VeriTrakkApp(App):
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
+        # Editing time (T): the arrows edit the picked time, T saves, X discards.
+        # Only while editing: otherwise each action skips (SkipAction) and the key
+        # goes on to its usual binding below; check_action() hides them from the footer.
+        Binding("left",  "time_edit_field(-1)", "Previous Part", show=False, priority=True),
+        Binding("right", "time_edit_field(1)",  "Next Part",     show=False, priority=True),
+        Binding("up",    "time_edit_value(1)",  "Increase",      show=False, priority=True),
+        Binding("down",  "time_edit_value(-1)", "Decrease",      show=False, priority=True),
+        Binding("t",     "save_time_edit",      "Save Time",     show=True,  priority=True),
+        Binding("x",     "discard_time_edit",   "Discard Changes", show=True, priority=True),
         # Run-mode task actions
         Binding("right", "complete_step",   "Complete",  show=False, priority=True),
         Binding("left",  "uncomplete_step", "Un-do",     show=False, priority=True),
@@ -1410,6 +1307,14 @@ class VeriTrakkApp(App):
     _build_dir:         Path    | None = None
     _build_path:        Path    | None = None  # set when editing an existing file
     _carried_over_source: Path  | None = None  # the quest Carry Over just finished (for Log)
+    # Editing time (T, Mike 2026-11-16): the picked time ("clock", or a task's index),
+    # the part being edited (0 hours, 1 minutes, 2 seconds), and the changes so far,
+    # which T saves and X discards.
+    _time_edit:         bool = False
+    _te_target:         object = None
+    _te_field:          int = 0
+    _te_clock_delta:    int = 0
+    _te_step_deltas:    dict = {}
     _build_root_path:   Path    | None = None  # base template for spawned instances
     _build_kind:        str           = "process"
     _build_spawn_instances: bool      = True
@@ -1482,7 +1387,7 @@ class VeriTrakkApp(App):
                 # run: process tree
                 with Vertical(id="view_run"):
                     with Horizontal(id="run_clock_strip"):
-                        yield Digits("00:00:00", id="quest_digit")
+                        yield ClockFace(id="quest_digit")
                         with Horizontal(id="run_clock_toggle_row"):
                             yield Switch(value=False, id="quest_clock_switch")
                             yield Static("CLOCKED OUT", id="quest_clock_state")
@@ -1525,25 +1430,10 @@ class VeriTrakkApp(App):
         self.set_interval(1, self._tick_clock)
         self.push_screen(SplashScreen(), callback=lambda _: self._show_home())
 
-    def on_key(self, event) -> None:
-        screen = self.screen
-        if not isinstance(screen, EditTimeScreen):
-            return
-        if event.key == "left":
-            screen.action_prev_field()
-            event.stop()
-        elif event.key == "right":
-            screen.action_next_field()
-            event.stop()
-        elif event.key == "up":
-            screen.action_increment()
-            event.stop()
-        elif event.key == "down":
-            screen.action_decrement()
-            event.stop()
-
     # ── Mode management ───────────────────────────────────────────────────────
     def _set_mode(self, mode: str) -> None:
+        if mode != "run" and self._time_edit:
+            self._time_edit_reset()   # (unsaved time changes are dropped)
         self._mode = mode
         mode_map = {
             "build": "btn_build",
@@ -2040,6 +1930,11 @@ class VeriTrakkApp(App):
                 total += self._work_quest_seconds_between(proc, step.active_since, now)
             live_seconds[idx] = max(0, total)
 
+        if self._time_edit:   # (unsaved time changes, so parents' sums show them too)
+            for idx, delta in self._te_step_deltas.items():
+                if idx in live_seconds:
+                    live_seconds[idx] = max(0, live_seconds[idx] + delta)
+
         for idx in range(total_steps - 1, -1, -1):
             children = children_map[idx]
             if children:
@@ -2199,7 +2094,7 @@ class VeriTrakkApp(App):
 
     def _refresh_quest_clock_widgets(self) -> None:
         strip = self.query_one("#run_clock_strip", Horizontal)
-        digit = self.query_one("#quest_digit", Digits)
+        digit = self.query_one("#quest_digit", ClockFace)
         switch = self.query_one("#quest_clock_switch", Switch)
         state = self.query_one("#quest_clock_state", Static)
         toolbar = self.query_one("#toolbar", Horizontal)
@@ -2211,6 +2106,8 @@ class VeriTrakkApp(App):
         for widget in themed:
             widget.remove_class("clocked_in")
             widget.remove_class("clocked_out")
+            # Editing time (T): these lines turn orange (Mike, 2026-11-16).
+            widget.set_class(self._time_edit, "time_editing")
 
         if not self._is_work_quest_active():
             strip.display = False
@@ -2219,7 +2116,8 @@ class VeriTrakkApp(App):
             return
 
         strip.display = True
-        digit.update(self._format_seconds(self._process.total_clock_seconds()))
+        editing_clock = self._time_edit and self._te_target == "clock"
+        digit.show(self._time_edit_clock_seconds(), self._te_field if editing_clock else None)
 
         # Set it silently: Textual delivers Switch.Changed after the fact, and a
         # redraw (the once-a-second tick) landing between a click and its
@@ -2347,6 +2245,7 @@ class VeriTrakkApp(App):
                         number_prefix=number_prefix,
                         show_process_badge=proc.kind == "work_quest",
                         live_seconds=live_seconds_for_step,
+                        edit_field=self._time_edit_field_for(idx),
                     ),
                     data=idx,
                 )
@@ -2376,6 +2275,7 @@ class VeriTrakkApp(App):
                         sub_done=sub_done if children else None,
                         sub_total=sub_total if children else None,
                         live_seconds=live_seconds.get(idx, max(0, step.duration_seconds)),
+                        edit_field=self._time_edit_field_for(idx),
                     )
                 )
             for child in node.children:
@@ -2619,7 +2519,7 @@ class VeriTrakkApp(App):
         return True
 
     def on_key(self, event) -> None:
-        if event.key != "right":
+        if event.key != "right" or self._time_edit:
             return
         if self._mode != "run" or not self._process or self._process.kind != "work_quest":
             return
@@ -2954,22 +2854,102 @@ class VeriTrakkApp(App):
         self._refresh_status()
         self._update_step_info()
 
+    # -- Editing time (T) (Mike, 2026-11-16) ------------------------------------
+    # T: the clock's outline turns orange and the clock's picked; a click on the
+    # clock or on a task (one with no subtasks: a parent's time is its tasks' sum)
+    # picks that time instead. Left/Right move between hours, minutes and seconds
+    # (the part being edited is orange), Up/Down change it. A change to a task's
+    # time changes the clocked time by as much. T again saves; X discards.
     def action_edit_time(self) -> None:
         if self._mode != "run" or not self._process or self._process.kind != "work_quest":
             return
-        tree = self.query_one("#process_tree", Tree)
-        node = tree.cursor_node
-        if node is None or node.data is None:
-            return
+        self._time_edit = True
+        self._te_target = "clock"
+        self._te_field = 0
+        self._te_clock_delta = 0
+        self._te_step_deltas = {}
+        self._time_edit_refresh()
+        self.refresh_bindings()
 
-        step_idx = node.data
-        if self._process.has_children(step_idx):
-            return
+    def _time_edit_reset(self) -> None:
+        self._time_edit = False
+        self._te_target = None
+        self._te_clock_delta = 0
+        self._te_step_deltas = {}
 
-        self.push_screen(
-            EditTimeChoiceScreen(),
-            callback=lambda choice: self._on_edit_time_choice(step_idx, choice),
-        )
+    def _time_edit_clock_seconds(self) -> int:
+        """The clocked time as shown: with the changes so far (a task's count too)."""
+        if not self._process:
+            return 0
+        total = self._process.total_clock_seconds()
+        if self._time_edit:
+            total += self._te_clock_delta + sum(self._te_step_deltas.values())
+        return max(0, total)
+
+    def _time_edit_field_for(self, idx: int) -> int | None:
+        return self._te_field if self._time_edit and self._te_target == idx else None
+
+    def _time_edit_pick(self, target: object) -> None:
+        if not self._time_edit:
+            return
+        self._te_target = target
+        self._time_edit_refresh()
+
+    def _time_edit_refresh(self) -> None:
+        self._refresh_quest_clock_widgets()
+        self._refresh_proc_tree_live()
+
+    def action_time_edit_field(self, step: int) -> None:
+        if not self._time_edit:
+            raise SkipAction()   # (not editing: the key does what it always does)
+        self._te_field = (self._te_field + step) % 3
+        self._time_edit_refresh()
+
+    def action_time_edit_value(self, sign: int) -> None:
+        if not self._time_edit or not self._process or self._te_target is None:
+            raise SkipAction()   # (not editing: the key does what it always does)
+        delta = sign * (3600, 60, 1)[self._te_field]
+        clock_now = self._time_edit_clock_seconds()
+        if self._te_target == "clock":
+            delta = max(delta, -clock_now)   # (not below zero)
+            self._te_clock_delta += delta
+        else:
+            idx = int(self._te_target)
+            step_now = max(0, self._live_step_seconds(idx) + self._te_step_deltas.get(idx, 0))
+            delta = max(delta, -step_now, -clock_now)   # (neither below zero)
+            self._te_step_deltas[idx] = self._te_step_deltas.get(idx, 0) + delta
+        self._time_edit_refresh()
+
+    def action_discard_time_edit(self) -> None:
+        if not self._time_edit:
+            raise SkipAction()   # (not editing: the key does what it always does)
+        self._time_edit_reset()
+        self._time_edit_refresh()
+        self._refresh_status()
+        self.refresh_bindings()
+        self.notify("Time changes discarded.", severity="information")
+
+    def action_save_time_edit(self) -> None:
+        if not self._time_edit or not self._process or not self._proc_path:
+            raise SkipAction()   # (not editing: T starts editing, action_edit_time())
+        proc = self._process
+        now = datetime.now()
+        for idx, delta in self._te_step_deltas.items():
+            if delta and 0 <= idx < len(proc.steps) and not proc.has_children(idx):
+                self._set_step_seconds(idx, max(0, self._live_step_seconds(idx, now) + delta), now)
+        clock_change = self._te_clock_delta + sum(self._te_step_deltas.values())
+        if clock_change:
+            proc.clock_adjust_seconds += clock_change
+        changed = bool(clock_change or any(self._te_step_deltas.values()))
+        self._time_edit_reset()
+        save_process(proc, self._proc_path)
+        self._rebuild_proc_tree()
+        self._refresh_run_sidebar()
+        self._refresh_quest_clock_widgets()
+        self._refresh_status()
+        self._update_step_info()
+        self.refresh_bindings()
+        self.notify("Time saved." if changed else "No time changes.", severity="information")
 
     def _focused_run_idx(self) -> int | None:
         node = self.query_one("#process_tree", Tree).cursor_node
@@ -3151,42 +3131,15 @@ class VeriTrakkApp(App):
         self._rebuild_proc_tree()
         self._update_step_info()
 
-    def _on_edit_time_choice(self, step_idx: int, choice: str | None) -> None:
-        if choice is None or not self._process:
+    def _set_step_seconds(self, step_idx: int, total_seconds: int, now: datetime) -> None:
+        """Set a task's (no subtasks) time to `total_seconds`; a task timing right
+        now keeps timing from there. Parents follow (not saved: the caller saves)."""
+        if not self._process or step_idx < 0 or step_idx >= len(self._process.steps):
             return
-
-        if choice == "quest":
-            step = self._process.steps[step_idx]
-            current_seconds = self._live_step_seconds(step_idx)
-            if not step.started and not step.completed:
-                current_seconds = max(0, step.duration_seconds)
-            self.push_screen(
-                EditTimeScreen("Edit Quest Time", step.label, current_seconds),
-                callback=lambda total_seconds: self._on_edit_quest_time_result(step_idx, total_seconds),
-            )
-        elif choice == "clock":
-            proc = self._process
-            self.push_screen(
-                EditTimeScreen(
-                    "Edit Clock In/Out Time",
-                    f"{proc.name}  |  Current total clock time",
-                    proc.total_clock_seconds(),
-                ),
-                callback=self._on_edit_clock_time_result,
-            )
-
-    def _on_edit_quest_time_result(self, step_idx: int, total_seconds: int | None) -> None:
-        if total_seconds is None or not self._process or not self._proc_path:
-            return
-        if step_idx < 0 or step_idx >= len(self._process.steps):
-            return
-
         step = self._process.steps[step_idx]
         if self._process.has_children(step_idx):
             return
-
         total_seconds = max(0, total_seconds)
-        now = datetime.now()
 
         if (
             self._process.kind == "work_quest"
@@ -3214,22 +3167,6 @@ class VeriTrakkApp(App):
 
         self._sync_duration_minutes(step)
         self._sync_parent_states_from_children()
-        save_process(self._process, self._proc_path)
-        self._rebuild_proc_tree()
-        self._refresh_run_sidebar()
-        self._refresh_status()
-        self._update_step_info()
-
-    def _on_edit_clock_time_result(self, total_seconds: int | None) -> None:
-        if total_seconds is None or not self._process or not self._proc_path:
-            return
-
-        desired_seconds = max(0, total_seconds)
-        current_seconds = max(0, self._process.total_clock_seconds())
-        self._process.clock_adjust_seconds += desired_seconds - current_seconds
-        save_process(self._process, self._proc_path)
-        self._refresh_quest_clock_widgets()
-        self._refresh_status()
 
     def _merged_instance_note_text(self, step_idx: int, notes_text: str) -> str:
         """Preserve template notes and append instance-only notes for spawned runs."""
@@ -4018,6 +3955,16 @@ class VeriTrakkApp(App):
             self.refresh_bindings()
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if event.node.tree.id == "process_tree" and self._time_edit:
+            # Editing time: a task picks its time to edit; a parent's is its tasks' sum.
+            idx = event.node.data
+            if idx is None or not self._process:
+                return
+            if self._process.has_children(idx):
+                self.notify("A parent's time is the sum of its tasks: pick one of them.", severity="information")
+                return
+            self._time_edit_pick(idx)
+            return
         if event.node.tree.id != "builder_tree":
             return
         if self._mode != "build" or not self._build_proc or not self._build_move_mode:
@@ -4092,17 +4039,13 @@ class VeriTrakkApp(App):
         except Exception:
             current_screen = None
 
-        if isinstance(current_screen, (EditTimeChoiceScreen, EditTimeScreen)):
-            if action in (
-                "complete_step",
-                "uncomplete_step",
-                "note_step",
-                "pause_step",
-                "toggle_clock",
-                "edit_time",
-                "complete_work_quest",
-            ):
-                return False
+        if action in ("time_edit_field", "time_edit_value", "save_time_edit", "discard_time_edit"):
+            return self._time_edit
+        if self._time_edit and action in (
+            "complete_step", "uncomplete_step", "note_step", "pause_step", "toggle_clock",
+            "edit_time", "close_active", "complete_work_quest", "run_linked_process", "back_to_work_quest",
+        ):
+            return False   # (while editing time, these wait: T saves, X discards)
         if action == "close_active":
             return self._process is not None
         if action in ("complete_step", "uncomplete_step", "note_step", "pause_step"):
