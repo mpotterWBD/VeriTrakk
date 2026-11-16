@@ -169,7 +169,6 @@ FooterKey.-complete-action {
     width: 100%;
     height: 25;
     border-bottom: solid #5f5f5f;
-    margin-bottom: 1;
 }
 
 #run_logo.clocked_in {

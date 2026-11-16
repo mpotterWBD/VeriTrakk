@@ -1453,7 +1453,8 @@ class VeriTrakkApp(App):
                 with Vertical(id="side_home"):
                     yield LogoArt(id="logo_art")
                     yield Static(
-                        " VeriTrakk\n Process Tracking\n Westbound Designs",
+                        Text(" VeriTrakk\n Process Tracking\n Westbound Designs\n")
+                        + Text(f" v{__version__}", style="not bold #8a8a8a"),   # (the version under the name: Mike, 2026-11-16)
                         id="logo",
                     )
 
@@ -2394,6 +2395,7 @@ class VeriTrakkApp(App):
         unique_id = self._extract_instance_unique_id(self._proc_path)
 
         name_t = Text()
+        name_t.append(f"VeriTrakk v{__version__}\n", style="#8a8a8a")   # (the version, under the logo's line: Mike, 2026-11-16)
         name_t.append(f'{kind_label}: ', style=f"bold {_KHAKI}")
         name_t.append(f'"{proc.name}"\n', style=f"bold {_SALMON}")
         name_t.append("File: ", style=f"bold {_KHAKI}")
