@@ -30,6 +30,7 @@ from textual.widgets import (
 from textual.widgets._footer import FooterKey
 
 from .wrap_tree import WrapTree
+from .version import __version__
 from .storage import (
     DATA_DIR, LOGS_DIR, Process, Step,
     load_process, save_process,
@@ -1357,7 +1358,7 @@ class AppFooter(Footer):
 class VeriTrakkApp(App):
     CSS_PATH  = "veritrakk.tcss"
     TITLE     = "VeriTrakk"
-    SUB_TITLE = "Westbound Designs"
+    SUB_TITLE = f"Westbound Designs  ·  v{__version__}"
 
     ENABLE_COMMAND_PALETTE = False
 
