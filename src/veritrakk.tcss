@@ -332,6 +332,7 @@ MarkdownFence {
     border: none;
     padding: 0 1;
     background: transparent;
+    overflow-x: hidden;
 }
 
 /* build */
@@ -393,6 +394,7 @@ MarkdownFence {
     border: none;
     padding: 0 1;
     background: transparent;
+    overflow-x: hidden;
 }
 
 /* logs */
