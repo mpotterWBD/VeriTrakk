@@ -4,7 +4,9 @@
 ## Project Description
 This application is a structured process-control checklist tool that enforces and documents the completion of required steps prior to process finalization
 
-Logging a completed process or work quest now creates both the plain-text archive log and a formatted PDF summary.
+Logging a finished work quest writes one PDF log (with the processes it linked inside it) and moves the quest and its process files into a folder beside it, so nothing is deleted.
+
+**Version 1.0.0.** See [CHANGELOG.md](CHANGELOG.md) for what's in each version and how the numbering works.
 
 ### Development Setup
 

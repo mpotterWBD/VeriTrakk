@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .version import __version__
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _APP_ROOT    = Path(__file__).resolve().parent.parent
 DATA_DIR     = _APP_ROOT / "data"
@@ -1194,7 +1196,7 @@ def generate_log_pdf_bytes(proc: Process, published_at: datetime | None = None,
 
     total_pages = len(pages)
     for idx, page in enumerate(pages, start=1):
-        page.append(_pdf_stream_text(margin, 26.0 / PDF_TEXT_SCALE, f"VeriTrakk  ·  Page {idx} of {total_pages}", font="F1", size=8, rgb=(0.55, 0.55, 0.55)))
+        page.append(_pdf_stream_text(margin, 26.0 / PDF_TEXT_SCALE, f"VeriTrakk {__version__}  ·  Page {idx} of {total_pages}", font="F1", size=8, rgb=(0.55, 0.55, 0.55)))
 
     scale = f"q {PDF_TEXT_SCALE:.4f} 0 0 {PDF_TEXT_SCALE:.4f} 0 0 cm"   # (the layout page scaled up to fill the real one)
     watermark = _watermark_stream()   # (drawn first: under everything on the page)
