@@ -130,16 +130,13 @@ FooterKey.-complete-action {
     align: center middle;
 }
 
-#matrix_top,
-#matrix_bottom {
+/* the logo in Braille text (app.py LogoArt), filling the panel above the name */
+#logo_art {
     width: 100%;
     height: 1fr;
-    background: #10161a;
-    border: round #25383f;
-    color: #3d9b68;
-    content-align: left top;
-    text-style: bold;
-    padding: 0 1;
+    content-align: center middle;
+    text-align: center;
+    padding: 1 1;
 }
 
 #logo {
