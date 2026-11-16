@@ -29,6 +29,7 @@ from textual.widgets import (
 # used to tag the "Complete Work Quest" key for its own CSS class.
 from textual.widgets._footer import FooterKey
 
+from .wrap_tree import WrapTree
 from .storage import (
     DATA_DIR, LOGS_DIR, Process, Step,
     load_process, save_process,
@@ -1469,7 +1470,7 @@ class VeriTrakkApp(App):
                         with Horizontal(id="run_clock_toggle_row"):
                             yield Switch(value=False, id="quest_clock_switch")
                             yield Static("CLOCKED OUT", id="quest_clock_state")
-                    yield Tree("", id="process_tree")
+                    yield WrapTree("", id="process_tree")
 
                 # build: toolbar + builder tree
                 with Vertical(id="view_build"):
@@ -1486,7 +1487,7 @@ class VeriTrakkApp(App):
                         yield Button("↓ Shift Down", id="btn_shift_down", variant="default", classes="build_btn")
                         yield Button("Link Process", id="btn_link_process", variant="default", classes="build_btn")
                         yield Button("Carry Over", id="btn_carry_over", variant="warning", classes="build_btn")
-                    yield Tree("New Process", id="builder_tree")
+                    yield WrapTree("New Process", id="builder_tree")
 
                 # logs viewer
                 with Vertical(id="view_logs"):
