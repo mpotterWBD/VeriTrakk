@@ -215,8 +215,8 @@ class TestLogFileTreeFilter:
         tree = LogFileTree(tmp_path)
         paths = _make_paths(
             tmp_path,
-            ["a.prcsslog", "b.wrkqstlog", "c#COMPLETE.prcss", "d.prcss", "e.txt"],
+            ["a.prcsslog", "b.wrkqstlog", "c#COMPLETE.prcss", "d.prcss", "e.txt", "f#COMPLETE.wrkqst", "g.wrkqst", "h.wrkqstlog.pdf", "i.prcsslog.pdf"],
         )
         result = tree.filter_paths(paths)
         names = {p.name for p in result}
-        assert names == {"a.prcsslog", "b.wrkqstlog", "c#COMPLETE.prcss"}
+        assert names == {"b.wrkqstlog", "h.wrkqstlog.pdf"}   # (work quest logs only: Mike, 2026-11-16)

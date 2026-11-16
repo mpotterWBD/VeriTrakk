@@ -813,6 +813,8 @@ class TestOnCarryOverSelected:
         assert finished.completed is True
         assert [s.completed for s in finished.steps] == [True, True]
         assert finished.steps[1].duration_seconds == 1800
+        # (Mike, 2026-11-16: the log labels it CARRIED OVER, not done here.)
+        assert [s.carried_over for s in finished.steps] == [False, True]
 
         # New quest: only the unfinished task, reset to zero.
         new_proc = load_process(new_path)
@@ -821,6 +823,7 @@ class TestOnCarryOverSelected:
         assert [s.label for s in new_proc.steps] == ["Half Done"]
         assert new_proc.steps[0].completed is False
         assert new_proc.steps[0].duration_seconds == 0
+        assert new_proc.steps[0].carried_over is False   # (in the new quest it's simply open)
 
         # The new quest is opened in the builder and becomes the active quest.
         assert shown == [new_path]
@@ -884,3 +887,57 @@ class TestRootTemplatePath:
         instance = tmp_path / "Foo#2026-01-01_00-00-00.prcss"
 
         assert app._root_template_path(instance) is None
+
+
+
+class TestLogWorkQuest:
+    # Mike, 2026-11-16: Log logs the finished quest that's open (or the one Carry
+    # Over just finished), no file browser; with none, it's the Logs browser.
+    def _quest(self, tmp_path, done=True, name="Week 1#COMPLETE.wrkqst"):
+        proc = Process(name="Week 1", kind="work_quest", completed=done,
+                       steps=[Step(label="A", level=1, completed=done)])
+        path = tmp_path / name
+        save_process(proc, path)
+        return proc, path
+
+    def test_targets_the_open_finished_quest(self, app, tmp_path):
+        proc, path = self._quest(tmp_path)
+        app._process, app._proc_path = proc, path
+        assert app._log_target() == (proc, path)
+
+    def test_not_an_unfinished_one(self, app, tmp_path):
+        proc, path = self._quest(tmp_path, done=False, name="Week 1.wrkqst")
+        app._process, app._proc_path = proc, path
+        assert app._log_target() is None
+
+    def test_the_one_carry_over_finished(self, app, tmp_path):
+        _, path = self._quest(tmp_path)
+        app._carried_over_source = path
+        proc, target = app._log_target()
+        assert target == path and proc.completed
+
+    def test_with_nothing_to_log_opens_the_logs_browser(self, app, monkeypatch):
+        opened = []
+        monkeypatch.setattr(app, "_logs_picker", lambda: opened.append(True))
+        app.action_log_work_quest()
+        assert opened == [True]
+
+    def test_confirmation_lists_the_files_then_logging_keeps_them(self, app, monkeypatch, tmp_path):
+        import src.storage as storage
+        monkeypatch.setattr(storage, "LOGS_DIR", tmp_path / "logs")
+        proc, path = self._quest(tmp_path)
+        app._process, app._proc_path = proc, path
+        shown = []
+        monkeypatch.setattr(app, "push_screen", lambda screen, callback=None: shown.append((screen, callback)))
+        app.action_log_work_quest()
+        screen, callback = shown[0]
+        assert "Week 1#COMPLETE.wrkqst" in screen._msg and "Week 1 Files" in screen._msg
+        assert "nothing is deleted" in screen._msg
+
+        monkeypatch.setattr(app, "_show_home", lambda: None)
+        monkeypatch.setattr(app, "query_one", lambda *a, **k: SimpleNamespace(update=lambda *_: None))
+        monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+        callback(True)
+        assert (tmp_path / "Week 1.wrkqstlog.pdf").exists()
+        assert (tmp_path / "Week 1 Files" / "Week 1#COMPLETE.wrkqst").exists()
+        assert app._process is None and app._proc_path is None   # (it's logged: no longer open)
