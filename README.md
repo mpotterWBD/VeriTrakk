@@ -6,7 +6,7 @@ This application is a structured process-control checklist tool that enforces an
 
 Logging a finished work quest writes one PDF log (with the processes it linked inside it) and moves the quest and its process files into a folder beside it, so nothing is deleted.
 
-**Version 1.0.0.** See [CHANGELOG.md](CHANGELOG.md) for what's in each version and how the numbering works.
+**Version 1.1.0.** See [CHANGELOG.md](CHANGELOG.md) for what's in each version and how the numbering works.
 
 ### Development Setup
 

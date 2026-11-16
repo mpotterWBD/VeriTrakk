@@ -14,16 +14,24 @@ a git tag `vX.Y.Z`.
 
 ---
 
-## Unreleased
+## 1.1.0 (2026-11-16)
 
 ### App
-- The home screen's left panel shows the Westbound Designs logo, drawn in text
-  (Braille dots, in the logo's cyan) from `assets/logo_with_circle_nowords.svg`,
-  sized to the panel. The matrix rain is gone.
-- On the run and build screens the left panel is narrower (52 columns, about
-  the logo's width; it was 30% of the window; the home screen keeps 30%). On the
-  run screen it has the logo in its top-left
-  corner, then a line, then the quest's name, file and progress.
+- **The logo in the app.** The home screen's left panel shows the Westbound
+  Designs logo, drawn in text (Braille dots, in the logo's cyan) from
+  `assets/logo_with_circle_nowords.svg`, sized to the panel. The matrix rain is
+  gone.
+- **Run screen.** The left panel has the logo in its top-left corner, a line
+  under it, then the quest's name, file and progress. Like the panel's other
+  lines, it's green clocked in and grey clocked out.
+- **Narrower left panel** on the run and build screens: 52 columns, about the
+  logo's width (it was 30% of the window). The home screen keeps 30%.
+- **Cleaner logo drawing.** Each dot is lit by how much of it the logo covers, so
+  edges are even; drawn small, the logo's two inner arrows are left out (they
+  only blurred into the rest). Settings at the top of `src/logo_art.py`.
+
+### Fixes
+- The logo's right edge was cut off by a dot (its width was rounded down).
 
 ## 1.0.0 (2026-11-16)
 

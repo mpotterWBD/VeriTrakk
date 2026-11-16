@@ -5,4 +5,4 @@
 The one place it's set: the app's header and every log PDF's footer show it.
 When you change it, add a section for it to the top of CHANGELOG.md.
 """
-__version__ = "1.0.0"
+__version__ = "1.1.0"
