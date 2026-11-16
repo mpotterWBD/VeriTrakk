@@ -9,11 +9,17 @@ sampling each dot at its middle.
 """
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 _CURVE_STEPS = 8   # straight pieces per Bezier curve
+
+SUB = 4                 # each dot sampled SUB x SUB times...
+COVER = 5 / 16          # ...and lit when the logo covers this much of it
+SMALL_DOTS = 64         # drawn narrower than this many dots, the SMALL_HIDE parts are left out
+SMALL_HIDE = {2, 3}     # the logo's two inner arrows (its 3rd and 4th <path>s): too fine to show small
 
 # Braille dot bits by (column, row) in a cell: the Unicode layout.
 _DOT_BITS = {(0, 0): 0x01, (0, 1): 0x02, (0, 2): 0x04, (1, 0): 0x08,
@@ -105,11 +111,11 @@ class Logo:
         except (OSError, ValueError):
             return None
 
-    def _row_spans(self, y: float) -> list[tuple[float, float]]:
+    def _row_spans(self, y: float, paths: list[list[list[Point]]] | None = None) -> list[tuple[float, float]]:
         """Where the scan line at `y` (logo units) is inside the logo: [x0, x1)
         spans, each path filled by the nonzero rule."""
         spans: list[tuple[float, float]] = []
-        for polys in self.paths:
+        for polys in self.paths if paths is None else paths:
             hits: list[tuple[float, int]] = []
             for poly in polys:
                 for (ax, ay), (bx, by) in zip(poly, poly[1:] + poly[:1]):
@@ -123,24 +129,46 @@ class Logo:
                     spans.append((hx, hits[k + 1][0]))
         return spans
 
-    def braille(self, cols: int, rows: int) -> list[str]:
+    def braille(self, cols: int, rows: int, corner: bool = False) -> list[str]:
         """The logo in Braille, as large as fits `cols` x `rows` characters
-        (keeping its shape), centred; one string per row, `cols` wide."""
+        (keeping its shape), centred, or with `corner` in the top-left corner;
+        one string per row, `cols` wide.
+
+        Each dot is sampled SUB x SUB times and lit when the logo covers at least
+        COVER of it, so edges come out even rather than ragged. Drawn small (under
+        SMALL_DOTS across), the SMALL_HIDE parts are left out (Mike, 2026-11-16:
+        at that size they only blurred into the rest)."""
         if cols <= 0 or rows <= 0:
             return []
         # A dot is half a cell wide and a quarter of one tall; cells are ~1:2, so dots ~square.
         scale = min(cols * 2 / self.w, rows * 4 / self.h)
-        dots_w, dots_h = int(self.w * scale), int(self.h * scale)
-        off_x = (cols * 2 - dots_w) // 2
-        off_y = (rows * 4 - dots_h) // 2
+        # Rounded, not cut down (Mike, 2026-11-16: 95.99 dots cut to 95 lost the ring's
+        # right edge), and never more than there's room for.
+        dots_w = min(cols * 2, round(self.w * scale))
+        dots_h = min(rows * 4, round(self.h * scale))
+        off_x = 0 if corner else (cols * 2 - dots_w) // 2
+        off_y = 0 if corner else (rows * 4 - dots_h) // 2
+        paths = self.paths
+        if dots_w < SMALL_DOTS:
+            paths = [p for k, p in enumerate(self.paths) if k not in SMALL_HIDE]
+        n = dots_w * SUB   # samples across a row
+        need = COVER * SUB * SUB
         cells = [[0] * cols for _ in range(rows)]
         for dy in range(dots_h):
-            spans = self._row_spans(self.y + (dy + 0.5) / scale)
-            if not spans:
-                continue
+            counts = [0] * dots_w
+            for k in range(SUB):
+                spans = self._row_spans(self.y + (dy + (k + 0.5) / SUB) / scale, paths)
+                inside = bytearray(n)
+                for a, b in spans:
+                    # samples sit at x + (i + 0.5) / (SUB * scale): those in [a, b)
+                    i0 = max(0, math.ceil((a - self.x) * scale * SUB - 0.5))
+                    i1 = min(n, math.ceil((b - self.x) * scale * SUB - 0.5))
+                    for i in range(i0, i1):
+                        inside[i] = 1
+                for dx in range(dots_w):
+                    counts[dx] += sum(inside[dx * SUB:(dx + 1) * SUB])
             for dx in range(dots_w):
-                lx = self.x + (dx + 0.5) / scale
-                if any(a <= lx < b for a, b in spans):
+                if counts[dx] >= need:
                     px, py = dx + off_x, dy + off_y
                     if 0 <= px < cols * 2 and 0 <= py < rows * 4:
                         cells[py // 4][px // 2] |= _DOT_BITS[(px % 2, py % 4)]

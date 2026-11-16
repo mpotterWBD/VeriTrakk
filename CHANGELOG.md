@@ -20,6 +20,10 @@ a git tag `vX.Y.Z`.
 - The home screen's left panel shows the Westbound Designs logo, drawn in text
   (Braille dots, in the logo's cyan) from `assets/logo_with_circle_nowords.svg`,
   sized to the panel. The matrix rain is gone.
+- On the run and build screens the left panel is narrower (52 columns, about
+  the logo's width; it was 30% of the window; the home screen keeps 30%). On the
+  run screen it has the logo in its top-left
+  corner, then a line, then the quest's name, file and progress.
 
 ## 1.0.0 (2026-11-16)
 

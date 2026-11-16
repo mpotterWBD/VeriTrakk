@@ -215,9 +215,10 @@ class LogoArt(Static):
     matrix rain); redrawn whenever the panel changes size. Empty if the logo
     file's missing."""
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, corner: bool = False, **kwargs) -> None:
         super().__init__("", **kwargs)
         self._logo = Logo.load(LOGO_SVG)
+        self._corner = corner   # in the top-left corner (the run panel), else centred
         self._drawn_for: tuple[int, int] = (0, 0)
 
     def on_mount(self) -> None:
@@ -233,7 +234,9 @@ class LogoArt(Static):
         if self._logo is None or size == self._drawn_for:
             return
         self._drawn_for = size
-        self.update("\n".join(self._logo.braille(*size)))
+        # One column narrower than the space, so the logo's right edge never sits
+        # against the boundary (Mike, 2026-11-16: it was clipping there).
+        self.update("\n".join(self._logo.braille(max(0, size[0] - 1), size[1], self._corner)))
 
 
 # ── Specialized DirectoryTree subclasses ──────────────────────────────────────
@@ -1445,7 +1448,7 @@ class VeriTrakkApp(App):
 
         with Horizontal(id="main"):
             # ── Sidebar (mode-driven) ──────────────────────────────────────
-            with ContentSwitcher(id="sidebar", initial="side_home"):
+            with ContentSwitcher(id="sidebar", initial="side_home", classes="home"):   # (starts on the home screen: wide)
                 # home
                 with Vertical(id="side_home"):
                     yield LogoArt(id="logo_art")
@@ -1456,8 +1459,12 @@ class VeriTrakkApp(App):
 
                 # run
                 with Vertical(id="side_run"):
-                    yield Static("", id="run_name")
-                    yield Static("", id="run_progress")
+                    # The logo in the top-left corner, the quest's name, file and
+                    # progress under it (Mike, 2026-11-16).
+                    yield LogoArt(corner=True, id="run_logo")
+                    with Vertical(id="run_info"):
+                        yield Static("", id="run_name")
+                        yield Static("", id="run_progress")
                     yield Static("", id="run_step_info")
 
                 # build
@@ -1548,7 +1555,10 @@ class VeriTrakkApp(App):
         self.refresh_bindings()
 
     def _switch(self, sidebar: str, content: str) -> None:
-        self.query_one("#sidebar", ContentSwitcher).current = sidebar
+        panel = self.query_one("#sidebar", ContentSwitcher)
+        panel.current = sidebar
+        # The home screen keeps the wide panel; the others the narrow one (Mike, 2026-11-16).
+        panel.set_class(sidebar == "side_home", "home")
         self.query_one("#content",  ContentSwitcher).current = content
 
     # ── Show methods ──────────────────────────────────────────────────────────
@@ -2194,8 +2204,9 @@ class VeriTrakkApp(App):
         toolbar = self.query_one("#toolbar", Horizontal)
         sidebar = self.query_one("#sidebar", ContentSwitcher)
         step_info = self.query_one("#run_step_info", Static)
+        run_logo = self.query_one("#run_logo")   # (the line under it, like the one above the step details)
 
-        themed = [strip, toolbar, sidebar, step_info]
+        themed = [strip, toolbar, sidebar, step_info, run_logo]
         for widget in themed:
             widget.remove_class("clocked_in")
             widget.remove_class("clocked_out")

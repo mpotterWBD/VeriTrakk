@@ -109,10 +109,15 @@ FooterKey.-complete-action {
 
 /* ── Sidebar ────────────────────────────────────────────── */
 #sidebar {
-    width: 30%;
+    width: 52;   /* (Mike, 2026-11-16: about the logo's width; it shows nothing long. Was 30%.) */
     height: 1fr;
     background: #0f1316;
     border-right: solid #2f3a35;
+}
+
+/* the home screen keeps the wide panel (app.py _switch() sets "home") */
+#sidebar.home {
+    width: 30%;
 }
 
 #sidebar.clocked_in {
@@ -154,6 +159,30 @@ FooterKey.-complete-action {
 #side_run {
     padding: 1;
     height: 1fr;
+}
+
+/* the logo (app.py LogoArt) in the top-left corner, a line under it, then the
+   quest's name and progress (Mike, 2026-11-16): 24 rows suit the panel's width
+   (a logo 48 columns wide is 24 rows tall). The line's like the others: green
+   clocked in, grey clocked out. */
+#run_logo {
+    width: 100%;
+    height: 25;
+    border-bottom: solid #5f5f5f;
+    margin-bottom: 1;
+}
+
+#run_logo.clocked_in {
+    border-bottom: solid #3f7a53;
+}
+
+#run_logo.clocked_out {
+    border-bottom: solid #5f5f5f;
+}
+
+#run_info {
+    width: 100%;
+    height: auto;
 }
 
 #run_name {
