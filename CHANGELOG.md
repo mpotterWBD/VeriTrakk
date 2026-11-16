@@ -20,6 +20,14 @@ a git tag `vX.Y.Z`.
 - The version shows on the home screen under the name, and on the run screen
   under the logo's line (as well as in the header).
 
+### Editing time (T)
+- Simpler, in place, no pop-ups. **T** turns the green/grey lines orange and
+  picks the clock; click the clock, or a task with no subtasks, to edit that
+  time instead (a parent's time is still the sum of its tasks). **Left/Right**
+  pick hours, minutes or seconds (the part being edited is orange), **Up/Down**
+  change it. Changing a task's time changes the clocked time by as much.
+  **T** again saves; **X** (in the footer while editing) discards.
+
 ## 1.1.0 (2026-11-16)
 
 ### App

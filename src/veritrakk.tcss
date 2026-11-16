@@ -300,10 +300,24 @@ MarkdownFence {
     border-bottom: solid #5f5f5f;
 }
 
+/* the clock (app.py ClockFace): hours, minutes, seconds; while editing time (T)
+   the part being edited is orange (Mike, 2026-11-16) */
 #quest_digit {
-    width: 30;
+    width: auto;
     min-width: 30;
+    height: 5;
+    padding: 1 1;
     color: #7fd4d8;
+}
+
+#quest_digit .clock_part,
+#quest_digit .clock_sep {
+    width: auto;
+    color: #7fd4d8;
+}
+
+#quest_digit .clock_part.editing {
+    color: #ff8c00;
 }
 
 #run_clock_toggle_row {
@@ -868,3 +882,24 @@ FilePickerScreen Label {
     align: right middle;
 }
 
+/* Editing time (T): the lines that are green clocked in and grey clocked out turn
+   orange (Mike, 2026-11-16). After the clocked rules, so these win. */
+#toolbar.time_editing {
+    border-bottom: solid #ff8c00;
+}
+
+#sidebar.time_editing {
+    border-right: solid #ff8c00;
+}
+
+#run_clock_strip.time_editing {
+    border-bottom: solid #ff8c00;
+}
+
+#run_step_info.time_editing {
+    border-top: solid #ff8c00;
+}
+
+#run_logo.time_editing {
+    border-bottom: solid #ff8c00;
+}

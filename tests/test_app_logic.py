@@ -941,3 +941,83 @@ class TestLogWorkQuest:
         assert (tmp_path / "Week 1.wrkqstlog.pdf").exists()
         assert (tmp_path / "Week 1 Files" / "Week 1#COMPLETE.wrkqst").exists()
         assert app._process is None and app._proc_path is None   # (it's logged: no longer open)
+
+
+
+class TestTimeEdit:
+    # Mike, 2026-11-16: T edits time in place (no pop-ups). The clock or a task (no
+    # subtasks) is picked; Left/Right pick hours/minutes/seconds, Up/Down change it;
+    # a task's change changes the clocked time by as much; T saves, X discards.
+    def _app(self, app, monkeypatch, tmp_path):
+        path = tmp_path / "Week.wrkqst"
+        proc = Process(name="Week", kind="work_quest", clock_adjust_seconds=3600, steps=[
+            Step(label="Giles", level=1, started=True),
+            Step(label="OQS", level=2, started=True, paused=True, duration_seconds=600),
+            Step(label="Plan", level=2),
+        ])
+        save_process(proc, path)
+        app._mode, app._process, app._proc_path = "run", proc, path
+        for name in ("_time_edit_refresh", "_rebuild_proc_tree", "_refresh_run_sidebar",
+                     "_refresh_quest_clock_widgets", "_refresh_status", "_update_step_info",
+                     "refresh_bindings", "notify"):
+            monkeypatch.setattr(app, name, lambda *a, **k: None)
+        return proc, path
+
+    def test_clock_edit_by_part_then_saved(self, app, monkeypatch, tmp_path):
+        proc, path = self._app(app, monkeypatch, tmp_path)
+        app.action_edit_time()
+        assert app._time_edit and app._te_target == "clock" and app._te_field == 0
+        app.action_time_edit_value(1)            # +1 hour
+        app.action_time_edit_field(1)            # minutes
+        app.action_time_edit_value(-1)           # -1 minute
+        assert app._time_edit_clock_seconds() == 3600 + 3600 - 60
+        assert load_process(path).total_clock_seconds() == 3600   # (not saved yet)
+        app.action_save_time_edit()
+        assert not app._time_edit
+        assert load_process(path).total_clock_seconds() == 3600 + 3600 - 60
+
+    def test_task_change_changes_the_clock_too(self, app, monkeypatch, tmp_path):
+        proc, path = self._app(app, monkeypatch, tmp_path)
+        app.action_edit_time()
+        app._time_edit_pick(1)                   # OQS
+        app.action_time_edit_field(1)            # minutes
+        app.action_time_edit_value(1)            # +1 minute
+        assert app._time_edit_clock_seconds() == 3600 + 60
+        app.action_save_time_edit()
+        saved = load_process(path)
+        assert saved.steps[1].duration_seconds == 660
+        assert saved.total_clock_seconds() == 3660
+
+    def test_never_below_zero(self, app, monkeypatch, tmp_path):
+        proc, path = self._app(app, monkeypatch, tmp_path)
+        app.action_edit_time()
+        app._time_edit_pick(1)                   # OQS: 10 minutes
+        app.action_time_edit_value(-1)           # -1 hour: only down to zero
+        assert app._te_step_deltas == {1: -600}
+        assert app._time_edit_clock_seconds() == 3000
+
+    def test_discard_leaves_everything(self, app, monkeypatch, tmp_path):
+        proc, path = self._app(app, monkeypatch, tmp_path)
+        app.action_edit_time()
+        app.action_time_edit_value(1)
+        app._time_edit_pick(1)
+        app.action_time_edit_value(1)
+        app.action_discard_time_edit()
+        assert not app._time_edit and app._te_step_deltas == {}
+        assert load_process(path).total_clock_seconds() == 3600
+        assert app._process.steps[1].duration_seconds == 600
+
+    def test_keys_pass_through_when_not_editing(self, app):
+        from textual.actions import SkipAction
+        for call in (lambda: app.action_time_edit_value(1), lambda: app.action_time_edit_field(1),
+                     app.action_save_time_edit, app.action_discard_time_edit):
+            with pytest.raises(SkipAction):
+                call()
+
+    def test_other_actions_wait_while_editing(self, app, monkeypatch, tmp_path):
+        self._app(app, monkeypatch, tmp_path)
+        app.action_edit_time()
+        for action in ("complete_step", "toggle_clock", "close_active", "edit_time"):
+            assert app.check_action(action, ()) is False
+        for action in ("save_time_edit", "discard_time_edit", "time_edit_value"):
+            assert app.check_action(action, ()) is True
